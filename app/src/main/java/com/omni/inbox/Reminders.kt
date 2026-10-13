@@ -10,6 +10,7 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import kotlinx.coroutines.runBlocking
 
 /**
  * Timed nudges: snoozed chats coming back and "remind me" on a message. Kept in the [Store]
@@ -20,15 +21,23 @@ object Reminders {
     const val EXTRA_OPEN = "open"
     private const val EXTRA_ID = "reminder_id"
 
-    fun add(ctx: Context, convKey: String, at: Long, text: String) {
-        val id = Store.get(ctx).addReminder(convKey, at, text)
+    fun add(ctx: Context, convKey: String, at: Long, text: String, kind: String = Reminder.KIND_REMIND) {
+        val id = Store.get(ctx).addReminder(convKey, at, text, kind)
         schedule(ctx, id, at)
+        if (kind == Reminder.KIND_SEND) Store.get(ctx).changed() // shows in the chat's queue
     }
 
-    /** Drops pending reminders for [convKey] (e.g. the chat was un-snoozed). */
+    /** Cancels one pending reminder or scheduled message. */
+    fun cancel(ctx: Context, id: Long) {
+        ctx.getSystemService(AlarmManager::class.java).cancel(alarm(ctx, id))
+        Store.get(ctx).deleteReminder(id)
+        Store.get(ctx).changed()
+    }
+
+    /** Drops pending reminders (not scheduled messages) for [convKey], e.g. the chat was un-snoozed. */
     fun cancelFor(ctx: Context, convKey: String) {
         val store = Store.get(ctx)
-        store.pendingReminders().filter { it.convKey == convKey }.forEach {
+        store.pendingReminders().filter { it.convKey == convKey && it.kind == Reminder.KIND_REMIND }.forEach {
             ctx.getSystemService(AlarmManager::class.java).cancel(alarm(ctx, it.id))
             store.deleteReminder(it.id)
         }
@@ -54,21 +63,33 @@ object Reminders {
         val r = store.reminder(id) ?: return
         store.deleteReminder(id)
         store.changed() // a finished snooze moves the chat back into the inbox
-        val title = store.conversation(r.convKey)?.title ?: "Omni Inbox"
+        val conv = store.conversation(r.convKey)
+        val title = conv?.title ?: "Omni Inbox"
+        if (r.kind == Reminder.KIND_SEND) {
+            val sent = conv != null && runBlocking { Actions.send(ctx, store, conv, r.text) }
+            // a sent scheduled message is quiet; only a failure needs your attention
+            if (sent) return
+            notify(ctx, r.convKey, id, title, "Scheduled message not sent: ${r.text}")
+            return
+        }
+        notify(ctx, r.convKey, id, title, r.text)
+    }
+
+    private fun notify(ctx: Context, convKey: String, id: Long, title: String, text: String) {
         val nm = ctx.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Reminders", NotificationManager.IMPORTANCE_HIGH))
         val open = PendingIntent.getActivity(
-            ctx, id.toInt(), Intent(ctx, MainActivity::class.java).putExtra(EXTRA_OPEN, r.convKey).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            ctx, id.toInt(), Intent(ctx, MainActivity::class.java).putExtra(EXTRA_OPEN, convKey).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val n = NotificationCompat.Builder(ctx, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat).setColor(0xFF00E5FF.toInt())
-            .setContentTitle(title).setContentText(r.text)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(r.text))
+            .setContentTitle(title).setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(open).setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .build()
-        runCatching { NotificationManagerCompat.from(ctx).notify(r.convKey, id.toInt(), n) } // no-op without POST_NOTIFICATIONS
+        runCatching { NotificationManagerCompat.from(ctx).notify(convKey, id.toInt(), n) } // no-op without POST_NOTIFICATIONS
     }
 
     class ReminderReceiver : BroadcastReceiver() {

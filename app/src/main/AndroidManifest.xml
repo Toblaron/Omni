@@ -23,6 +23,12 @@
         <package android:name="com.facebook.orca" />
         <package android:name="com.facebook.mlite" />
         <package android:name="com.snapchat.android" />
+        <package android:name="com.instagram.android" />
+        <package android:name="com.instagram.lite" />
+        <package android:name="com.discord" />
+        <package android:name="com.Slack" />
+        <package android:name="com.microsoft.teams" />
+        <package android:name="com.linkedin.android" />
         <package android:name="com.google.android.apps.messaging" />
         <package android:name="com.samsung.android.messaging" />
     </queries>
@@ -62,5 +68,14 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <receiver android:name=".Widget" android:exported="false" android:label="Awaiting reply">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_info" />
+        </receiver>
+        <service android:name=".Widget$Rows" android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
     </application>
 </manifest>

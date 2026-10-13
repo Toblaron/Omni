@@ -31,6 +31,20 @@ object Actions {
         }
     }
 
+    /** Only SMS (sent by our own alarm) and Telegram (scheduled on its servers) can send later. */
+    fun canSchedule(ctx: Context, c: Conversation): Boolean =
+        (tgChat(c) != null && Telegram.auth.value == Telegram.Auth.Ready) || (isSms(c) && SmsSync.canSend(ctx))
+
+    /** Sends [body] into [c] at [at]; false if this chat can't schedule. */
+    suspend fun schedule(ctx: Context, c: Conversation, body: String, at: Long): Boolean {
+        val tg = tgChat(c)
+        return when {
+            tg != null && Telegram.auth.value == Telegram.Auth.Ready -> Telegram.sendText(tg, body, at) == null
+            isSms(c) && SmsSync.canSend(ctx) -> { Reminders.add(ctx, c.key, at, body, Reminder.KIND_SEND); true }
+            else -> false
+        }
+    }
+
     /** Opens [c] in its own app: a deep link where one exists, else the notification's tap target, else the app. */
     fun openChat(ctx: Context, c: Conversation) {
         deepLink(c)?.let { link ->

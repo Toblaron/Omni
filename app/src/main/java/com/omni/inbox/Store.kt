@@ -14,6 +14,11 @@ data class Msg(
     val outgoing: Boolean,
     val convKey: String = "",
     val channel: Channel? = null,
+    /** The sender deleted it in their app after we captured it. */
+    val revoked: Boolean = false,
+    /** Text before the sender edited it, if they did. */
+    val original: String? = null,
+    val hasImage: Boolean = false,
 )
 
 data class Conversation(
@@ -60,7 +65,13 @@ data class Person(val key: String, val name: String, val chats: List<Conversatio
     val followUp get() = chats.any { it.followUp && !it.muted }
 }
 
-data class Reminder(val id: Long, val convKey: String, val at: Long, val text: String)
+/** A timed nudge ([KIND_REMIND]) or a message to send later ([KIND_SEND]). */
+data class Reminder(val id: Long, val convKey: String, val at: Long, val text: String, val kind: String = KIND_REMIND) {
+    companion object {
+        const val KIND_REMIND = "remind"
+        const val KIND_SEND = "send"
+    }
+}
 
 data class SearchHit(val id: Long, val convKey: String, val channel: Channel, val title: String, val sender: String?, val text: String, val ts: Long)
 
@@ -110,6 +121,17 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
             }
             quiet.chunked(500).forEach { ids -> db.execSQL("UPDATE messages SET asks=0 WHERE id IN (${ids.joinToString(",")})") }
         }
+        if (old < 5) {
+            db.execSQL("ALTER TABLE messages ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE messages ADD COLUMN original TEXT")
+            // edits rewrite the body, so the search index has to follow
+            db.execSQL("CREATE TRIGGER messages_bu BEFORE UPDATE OF body ON messages BEGIN INSERT INTO messages_fts(messages_fts, docid, body, conv_title, sender) VALUES ('delete', old.id, old.body, old.conv_title, old.sender); END")
+            db.execSQL("CREATE TRIGGER messages_au AFTER UPDATE OF body ON messages BEGIN INSERT INTO messages_fts(docid, body, conv_title, sender) VALUES (new.id, new.body, new.conv_title, new.sender); END")
+            // downscaled JPEGs from notifications; encrypted with the rest of the database
+            db.execSQL("CREATE TABLE media(msg_id INTEGER PRIMARY KEY, jpeg BLOB NOT NULL)")
+            db.execSQL("CREATE TRIGGER messages_media_ad AFTER DELETE ON messages BEGIN DELETE FROM media WHERE msg_id = old.id; END")
+            db.execSQL("ALTER TABLE reminders ADD COLUMN kind TEXT NOT NULL DEFAULT 'remind'")
+        }
     }
 
     /**
@@ -120,10 +142,11 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
     fun add(
         channel: Channel, pkg: String?, convKey: String, convTitle: String, sender: String?,
         text: String, ts: Long, outgoing: Boolean, uniq: String, fuzzy: Boolean,
-        address: String? = null, notify: Boolean = true,
+        address: String? = null, notify: Boolean = true, revisable: Boolean = false, image: ByteArray? = null,
     ): Boolean {
         val db = writableDatabase
         db.rawQuery("SELECT 1 FROM deleted WHERE uniq=?", arrayOf(uniq)).use { if (it.moveToFirst()) return false }
+        if (revisable && revise(convKey, ts, outgoing, text)) { if (notify) changed(); return false }
         if (fuzzy) {
             db.rawQuery(
                 "SELECT 1 FROM messages WHERE channel=? AND body=? AND ts BETWEEN ? AND ? AND outgoing=? LIMIT 1",
@@ -136,11 +159,34 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
             put("body", text); put("ts", ts); put("outgoing", if (outgoing) 1 else 0); put("uniq", uniq)
             put("asks", if (Signals.asks(text)) 1 else 0)
         }, SQLiteDatabase.CONFLICT_IGNORE)
+        if (row != -1L && image != null) db.insert("media", null, ContentValues().apply { put("msg_id", row); put("jpeg", image) })
         if (row != -1L && notify) changed()
         return row != -1L
     }
 
-    fun changed() { changes.value = changes.value + 1 }
+    /**
+     * Notifications re-post a message with the same timestamp when the sender deletes or edits it.
+     * Marks the earlier copy deleted, or swaps in the new text keeping the first version; true if so.
+     */
+    private fun revise(convKey: String, ts: Long, outgoing: Boolean, text: String): Boolean {
+        val db = writableDatabase
+        val (id, body) = db.rawQuery(
+            "SELECT id, body FROM messages WHERE conv_key=? AND ts=? AND outgoing=? AND revoked=0 LIMIT 1",
+            arrayOf(convKey, ts.toString(), if (outgoing) "1" else "0"),
+        ).use { if (it.moveToFirst()) it.getLong(0) to it.getString(1) else return false }
+        if (body == text) return false
+        if (Revisions.isDeletedNotice(text)) db.execSQL("UPDATE messages SET revoked=1 WHERE id=?", arrayOf<Any>(id))
+        else db.execSQL("UPDATE messages SET original=IFNULL(original, body), body=?, asks=? WHERE id=?", arrayOf<Any>(text, if (Signals.asks(text)) 1 else 0, id))
+        return true
+    }
+
+    fun image(msgId: Long): ByteArray? =
+        readableDatabase.rawQuery("SELECT jpeg FROM media WHERE msg_id=?", arrayOf(msgId.toString())).use { if (it.moveToFirst()) it.getBlob(0) else null }
+
+    fun changed() {
+        changes.value = changes.value + 1
+        Widget.refresh(ctx)
+    }
 
     fun inTransaction(block: () -> Unit) {
         val db = writableDatabase
@@ -206,15 +252,7 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
         readableDatabase.rawQuery("$conversationSelect WHERE m.conv_key=? GROUP BY m.conv_key", arrayOf(key))
             .use { c -> if (c.moveToFirst()) readConversation(c) else null }
 
-    fun messages(key: String): List<Msg> =
-        readableDatabase.rawQuery(
-            "SELECT id, sender, body, ts, outgoing FROM messages WHERE conv_key=? ORDER BY ts",
-            arrayOf(key),
-        ).use { c ->
-            buildList {
-                while (c.moveToNext()) add(Msg(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3), c.getInt(4) == 1))
-            }
-        }
+    fun messages(key: String): List<Msg> = messages(listOf(key))
 
     /** Who-wrote-when since [since], for reply statistics. */
     fun timeline(since: Long): List<Stats.Row> =
@@ -230,11 +268,15 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
     fun messages(keys: List<String>): List<Msg> {
         if (keys.isEmpty()) return emptyList()
         return readableDatabase.rawQuery(
-            "SELECT id, sender, body, ts, outgoing, conv_key, channel FROM messages WHERE conv_key IN (${keys.joinToString(",") { "?" }}) ORDER BY ts",
+            "SELECT m.id, m.sender, m.body, m.ts, m.outgoing, m.conv_key, m.channel, m.revoked, m.original, md.msg_id IS NOT NULL " +
+                "FROM messages m LEFT JOIN media md ON md.msg_id = m.id WHERE m.conv_key IN (${keys.joinToString(",") { "?" }}) ORDER BY m.ts",
             keys.toTypedArray(),
         ).use { c ->
             buildList {
-                while (c.moveToNext()) add(Msg(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3), c.getInt(4) == 1, c.getString(5), Channel.valueOf(c.getString(6))))
+                while (c.moveToNext()) add(Msg(
+                    c.getLong(0), c.getString(1), c.getString(2), c.getLong(3), c.getInt(4) == 1, c.getString(5), Channel.valueOf(c.getString(6)),
+                    revoked = c.getInt(7) == 1, original = c.getString(8), hasImage = c.getInt(9) == 1,
+                ))
             }
         }
     }
@@ -287,6 +329,54 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
         changed()
     }
 
+    // ---------- retention & backup ----------
+
+    /** Deletes messages older than [cutoff] except in pinned chats; re-syncs won't bring them back. */
+    fun purgeOlderThan(cutoff: Long) =
+        purge("ts < ? AND conv_key NOT IN (SELECT conv_key FROM conv_state WHERE pinned=1)", arrayOf(cutoff))
+
+    /** Writes the whole database to [file], encrypted with [password] instead of the device key. */
+    fun exportTo(file: java.io.File, password: String) {
+        file.delete()
+        val db = writableDatabase
+        db.execSQL("ATTACH DATABASE ? AS bk KEY ?", arrayOf<Any>(file.path, password))
+        try {
+            db.rawQuery("SELECT sqlcipher_export('bk')", null).use { it.moveToFirst() }
+        } finally {
+            db.execSQL("DETACH DATABASE bk")
+        }
+    }
+
+    /**
+     * Merges a backup made by [exportTo] into this database; returns how many messages were new.
+     * A wrong password fails on the first read. Manual cross-app links aren't restored.
+     */
+    fun importFrom(file: java.io.File, password: String): Int {
+        val db = writableDatabase
+        db.execSQL("ATTACH DATABASE ? AS bk KEY ?", arrayOf<Any>(file.path, password))
+        try {
+            fun count() = db.rawQuery("SELECT COUNT(*) FROM messages", null).use { it.moveToFirst(); it.getLong(0) }
+            db.rawQuery("SELECT COUNT(*) FROM bk.messages", null).use { it.moveToFirst() } // throws on a wrong password
+            val before = count()
+            inTransaction {
+                db.execSQL("INSERT OR IGNORE INTO deleted(uniq) SELECT uniq FROM bk.deleted")
+                db.execSQL(
+                    "INSERT OR IGNORE INTO messages(channel, pkg, conv_key, conv_title, address, sender, body, ts, outgoing, uniq, asks, revoked, original) " +
+                        "SELECT channel, pkg, conv_key, conv_title, address, sender, body, ts, outgoing, uniq, asks, revoked, original FROM bk.messages " +
+                        "WHERE uniq NOT IN (SELECT uniq FROM deleted)"
+                )
+                db.execSQL("INSERT OR IGNORE INTO media(msg_id, jpeg) SELECT m.id, bm.jpeg FROM bk.media bm JOIN bk.messages b ON b.id = bm.msg_id JOIN messages m ON m.uniq = b.uniq")
+                db.execSQL(
+                    "INSERT OR IGNORE INTO conv_state(conv_key, seen_ts, done_ts, pinned, archived_ts, muted, snooze_until, draft) " +
+                        "SELECT conv_key, seen_ts, done_ts, pinned, archived_ts, muted, snooze_until, draft FROM bk.conv_state"
+                )
+            }
+            return (count() - before).toInt().also { changed() }
+        } finally {
+            db.execSQL("DETACH DATABASE bk")
+        }
+    }
+
     // ---------- reading state ----------
 
     private fun touchState(key: String) =
@@ -321,16 +411,16 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
 
     // ---------- reminders ----------
 
-    fun addReminder(convKey: String, at: Long, text: String): Long =
-        writableDatabase.insert("reminders", null, ContentValues().apply { put("conv_key", convKey); put("at", at); put("text", text) })
+    fun addReminder(convKey: String, at: Long, text: String, kind: String = Reminder.KIND_REMIND): Long =
+        writableDatabase.insert("reminders", null, ContentValues().apply { put("conv_key", convKey); put("at", at); put("text", text); put("kind", kind) })
 
     fun reminder(id: Long): Reminder? = reminders("id=?", arrayOf(id.toString())).firstOrNull()
     fun pendingReminders(): List<Reminder> = reminders("at > ?", arrayOf(System.currentTimeMillis().toString()))
     fun deleteReminder(id: Long) = writableDatabase.execSQL("DELETE FROM reminders WHERE id=?", arrayOf<Any>(id))
 
     private fun reminders(where: String, args: Array<String>) =
-        readableDatabase.rawQuery("SELECT id, conv_key, at, text FROM reminders WHERE $where ORDER BY at", args)
-            .use { c -> buildList { while (c.moveToNext()) add(Reminder(c.getLong(0), c.getString(1), c.getLong(2), c.getString(3))) } }
+        readableDatabase.rawQuery("SELECT id, conv_key, at, text, kind FROM reminders WHERE $where ORDER BY at", args)
+            .use { c -> buildList { while (c.moveToNext()) add(Reminder(c.getLong(0), c.getString(1), c.getLong(2), c.getString(3), c.getString(4))) } }
 
     fun markSeen(key: String) {
         touchState(key)
@@ -382,7 +472,7 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
 
     companion object {
         private const val DB_NAME = "omni-vault.db"
-        private const val VERSION = 4
+        private const val VERSION = 5
         private const val FOLLOW_UP_MIN = 2 * 86_400_000L
         private const val FOLLOW_UP_MAX = 14 * 86_400_000L
         private val WA_JID = Regex("""(\d{6,15})@s\.whatsapp\.net""")

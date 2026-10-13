@@ -17,11 +17,15 @@ object Snapchat {
 
     fun isTyping(text: String) = TYPING.containsMatchIn(text)
 
-    /** A plain (non-MessagingStyle) notification that belongs to a conversation. */
+    /**
+     * A plain (non-MessagingStyle) notification that belongs to a conversation. Used for every
+     * [Channel.strict] app: a reply box alone isn't enough when the app files the notification
+     * under another category (Instagram comments have one too).
+     */
     fun isChat(n: Notification): Boolean =
         n.category == Notification.CATEGORY_MESSAGE ||
             n.shortcutId != null ||
-            n.actions?.any { !it.remoteInputs.isNullOrEmpty() } == true
+            (n.category == null && n.actions?.any { !it.remoteInputs.isNullOrEmpty() } == true)
 
     /** Splits "Anna: hey" into sender and text when the title is just "Snapchat". */
     fun splitSender(title: String?, text: String): Pair<String?, String> {

@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -330,7 +331,7 @@ private fun SettingsScreen(onTelegram: () -> Unit, onStats: () -> Unit, onBack: 
     val ctx = LocalContext.current
     var lockOn by remember { mutableStateOf(AppLock.isEnabled(ctx)) }
     val lockAvailable = remember { AppLock.available(ctx) }
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text("<", fontFamily = Head, fontSize = 20.sp, color = Cyan) }
             Hud("System", size = 16.sp, bold = true)
@@ -369,6 +370,86 @@ private fun SettingsScreen(onTelegram: () -> Unit, onStats: () -> Unit, onBack: 
                 color = CyanDim, fontSize = 14.sp)
             NeonButton("Import chat file") { pick.launch(arrayOf("text/plain", "application/zip")) }
         }
+        Rule()
+        KeepSetting()
+        Rule()
+        BackupSetting()
+    }
+}
+
+@Composable
+private fun KeepSetting() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var days by remember { mutableIntStateOf(Housekeeping.keepDays(ctx)) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Hud("Keep messages", size = 11.sp)
+        Text("Older messages are deleted automatically once a day. Pinned chats are kept whole.", color = CyanDim, fontSize = 14.sp)
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Housekeeping.KEEP_CHOICES.forEach { (d, label) ->
+                Chip(label, Cyan, d == days) { days = d; scope.launch(Dispatchers.IO) { Housekeeping.setKeepDays(ctx, d) } }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BackupSetting() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // "export" or "restore" while asking for the password; the file is picked afterwards
+    var asking by remember { mutableStateOf<String?>(null) }
+    var password by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    fun run(label: String, block: () -> String) {
+        busy = true
+        scope.launch {
+            val msg = withContext(Dispatchers.IO) { runCatching(block).getOrElse { "$label failed: ${it.message ?: "wrong password or not a backup"}" } }
+            busy = false
+            Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
+        }
+    }
+    val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        val pw = password; password = ""
+        if (uri != null) run("Backup") { Housekeeping.export(ctx, uri, pw); "Backup saved" }
+    }
+    val open = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val pw = password; password = ""
+        if (uri != null) run("Restore") { "Restored ${Housekeeping.restore(ctx, uri, pw)} messages" }
+    }
+    asking?.let { mode ->
+        var repeat by remember { mutableStateOf("") }
+        val ok = password.length >= 8 && (mode == "restore" || repeat == password)
+        AlertDialog(
+            onDismissRequest = { asking = null; password = "" }, containerColor = Panel, shape = Angled,
+            title = { Hud(if (mode == "export") "Backup password" else "Backup's password", size = 12.sp, bold = true) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(if (mode == "export") "The backup is encrypted with this password. Without it the file can't be opened, not even by you."
+                        else "Enter the password the backup was made with.", color = CyanDim, fontSize = 14.sp)
+                    NeonField(password, { password = it }, "password (8+ characters)", Modifier.fillMaxWidth(), secret = true)
+                    if (mode == "export") NeonField(repeat, { repeat = it }, "repeat password", Modifier.fillMaxWidth(), secret = true)
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = ok, onClick = {
+                    asking = null
+                    if (mode == "export") save.launch("omni-inbox-${SimpleDateFormat("yyyy-MM-dd", Locale.US).format(System.currentTimeMillis())}.omnibackup")
+                    else open.launch(arrayOf("*/*"))
+                }) { Hud("Next", size = 9.sp, color = if (ok) Cyan else CyanDim) }
+            },
+            dismissButton = { TextButton(onClick = { asking = null; password = "" }) { Hud("Cancel", size = 9.sp) } },
+        )
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Hud("Backup", size = 11.sp)
+        Text("Save everything to a password-protected file (e.g. on Google Drive), or merge a backup back in. Images included; manual links between apps aren't.",
+            color = CyanDim, fontSize = 14.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NeonButton("Export", !busy) { asking = "export" }
+            NeonButton("Restore", !busy) { asking = "restore" }
+        }
+        if (busy) Hud("Working…", size = 9.sp, color = CyanDim)
     }
 }
 

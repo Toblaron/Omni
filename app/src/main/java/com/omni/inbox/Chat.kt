@@ -19,6 +19,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -213,10 +214,36 @@ private fun Bubble(m: Msg, c: Conversation, showApp: Boolean, selection: Selecti
         ) {
             if (showApp) Hud(c.channel.label + if (!mine && m.sender != null && m.sender != c.title) " · ${m.sender}" else "", size = 7.sp, color = Color(c.channel.color))
             else if (!mine && m.sender != null && m.sender != c.title) Hud(m.sender, size = 8.sp, color = Color(c.channel.color))
-            Text(m.text, color = Cyan)
-            Hud(shortTime(m.ts), size = 7.sp, color = CyanDim, modifier = Modifier.align(Alignment.End))
+            if (m.hasImage) Thumb(m.id)
+            var showOriginal by remember(m.id) { mutableStateOf(false) }
+            Text(if (showOriginal && m.original != null) m.original else m.text, color = if (m.revoked) CyanDim else Cyan)
+            Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
+                if (m.revoked) Hud("🗑 deleted by sender", size = 7.sp, color = Alert, modifier = Modifier.padding(end = 8.dp))
+                if (m.original != null) Hud(if (showOriginal) "original · show edited" else "✎ edited · show original", size = 7.sp, color = Alert,
+                    modifier = Modifier.clickable { showOriginal = !showOriginal }.padding(end = 8.dp))
+                Hud(shortTime(m.ts), size = 7.sp, color = CyanDim)
+            }
         }
         SignalChips(m, c)
+    }
+}
+
+/** A captured picture; tap for full size. */
+@Composable
+private fun Thumb(id: Long) {
+    val ctx = LocalContext.current
+    val bmp by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, id) {
+        value = withContext(Dispatchers.IO) {
+            Store.get(ctx).image(id)?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }
+        }
+    }
+    var full by remember { mutableStateOf(false) }
+    val b = bmp ?: return
+    androidx.compose.foundation.Image(
+        b, null, Modifier.padding(bottom = 6.dp).widthIn(max = 276.dp).heightIn(max = 300.dp).clickable { full = true },
+    )
+    if (full) androidx.compose.ui.window.Dialog(onDismissRequest = { full = false }) {
+        androidx.compose.foundation.Image(b, null, Modifier.fillMaxWidth().clickable { full = false })
     }
 }
 
@@ -404,6 +431,30 @@ private fun ReplyBar(store: Store, c: Conversation) {
         withContext(Dispatchers.IO) { store.saveDraft(c.key, text) }
     }
 
+    val canSchedule = remember(version, c.key, tgAuth) { Actions.canSchedule(ctx, c) }
+    val queued by produceState(emptyList<Reminder>(), version, c.key) {
+        value = withContext(Dispatchers.IO) { store.pendingReminders().filter { it.convKey == c.key && it.kind == Reminder.KIND_SEND } }
+    }
+    var scheduling by remember { mutableStateOf(false) }
+    if (scheduling) ScheduleDialog(onDismiss = { scheduling = false }) { at ->
+        scheduling = false
+        val body = text.trim()
+        text = ""
+        scope.launch {
+            val ok = Actions.schedule(ctx, c, body, at)
+            if (!ok) text = body
+            Toast.makeText(ctx, if (ok) "Scheduled · ${shortTime(at)} ${java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(at)}" else "Couldn't schedule", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    queued.forEach { r ->
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            Hud("⏱ " + shortTime(r.at) + " " + java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(r.at), size = 8.sp, color = CyanDim)
+            Spacer(Modifier.width(8.dp))
+            Text(r.text, Modifier.weight(1f), color = CyanDim, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            TextButton(onClick = { scope.launch(Dispatchers.IO) { Reminders.cancel(ctx, r.id) } }) { Hud("✕", size = 10.sp, color = Alert) }
+        }
+    }
     if (!canReply) {
         Text("// Reply channel opens when a new message arrives from this chat. Use OPEN ↗ meanwhile.",
             Modifier.padding(16.dp), fontSize = 14.sp, color = CyanDim)
@@ -412,6 +463,9 @@ private fun ReplyBar(store: Store, c: Conversation) {
     Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
         NeonField(text, { text = it }, "Transmit via ${c.channel.label}", Modifier.weight(1f), singleLine = false)
         Spacer(Modifier.width(8.dp))
+        if (canSchedule && text.isNotBlank()) {
+            TextButton(onClick = { scheduling = true }) { Text("⏱", fontSize = 20.sp, color = Cyan) }
+        }
         NeonButton("Send", text.isNotBlank()) {
             val body = text.trim()
             text = ""
@@ -423,4 +477,34 @@ private fun ReplyBar(store: Store, c: Conversation) {
             }
         }
     }
+}
+
+/** Snooze presets plus "pick date & time…", for sending later. */
+@Composable
+private fun ScheduleDialog(onDismiss: () -> Unit, onPick: (Long) -> Unit) {
+    val ctx = LocalContext.current
+    val options = remember { snoozeOptions(System.currentTimeMillis()) }
+    AlertDialog(
+        onDismissRequest = onDismiss, containerColor = Panel, shape = Angled,
+        title = { Hud("Send later", size = 12.sp, bold = true) },
+        text = {
+            Column {
+                options.forEach { (label, at) ->
+                    Text(label, Modifier.fillMaxWidth().clickable { onPick(at) }.padding(vertical = 12.dp), color = Cyan, fontSize = 17.sp)
+                }
+                Text("Pick date & time…", Modifier.fillMaxWidth().clickable {
+                    val cal = Calendar.getInstance()
+                    android.app.DatePickerDialog(ctx, { _, y, mo, d ->
+                        android.app.TimePickerDialog(ctx, { _, h, mi ->
+                            cal.set(y, mo, d, h, mi, 0)
+                            if (cal.timeInMillis > System.currentTimeMillis()) onPick(cal.timeInMillis)
+                            else Toast.makeText(ctx, "That time has passed", Toast.LENGTH_SHORT).show()
+                        }, cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE), true).show()
+                    }, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)).show()
+                }.padding(vertical = 12.dp), color = Cyan, fontSize = 17.sp)
+                Text("SMS goes out from this phone at that time; Telegram schedules it on its servers.", color = CyanDim, fontSize = 13.sp)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Hud("Cancel", size = 9.sp) } },
+    )
 }

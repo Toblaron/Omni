@@ -3,7 +3,11 @@ package com.omni.inbox
 import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import android.graphics.Bitmap
+import android.graphics.drawable.Icon
+import android.os.Build
 import androidx.core.app.NotificationCompat
+import androidx.core.os.BundleCompat
 
 /**
  * Captures incoming messages from the notifications of supported apps. Most messengers post
@@ -42,11 +46,14 @@ class OmniListener : NotificationListenerService() {
                 if (channel == Channel.SNAPCHAT && Snapchat.isTyping(text)) continue
                 val sender = m.person?.name?.toString()
                 val outgoing = m.person == null || (me != null && sender == me)
+                val image = m.dataUri?.takeIf { m.dataMimeType?.startsWith("image/") == true }?.let { Thumbs.fromUri(this, it) }
                 store.add(
                     channel, sbn.packageName, key, convTitle, if (outgoing) null else sender, text,
                     m.timestamp, outgoing, "$key|${m.timestamp}|${text.hashCode()}",
                     // incoming messages carry exact timestamps; our own echoed replies don't match ours
                     fuzzy = outgoing || channel == Channel.SMS,
+                    // same timestamp, new text: the sender deleted or edited it
+                    revisable = !outgoing, image = image,
                 )
             }
             Replies.remember(key, n)
@@ -56,18 +63,25 @@ class OmniListener : NotificationListenerService() {
         var text = n.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.takeIf { it.isNotBlank() } ?: return
         if (SUMMARY.matches(text)) return
         var sender = title
+        // likes, stories, streaks, friend requests… aren't conversations
+        if (channel.strict && !Snapchat.isChat(n)) return
         if (channel == Channel.SNAPCHAT) {
-            // streaks, stories, Spotlight, friend requests… aren't conversations
-            if (!Snapchat.isChat(n) || Snapchat.isTyping(text)) return
+            if (Snapchat.isTyping(text)) return
             Snapchat.splitSender(title, text).let { (s, t) -> sender = s; text = t }
         }
         val convTitle = sender ?: channel.label
         val key = "${sbn.packageName}:${n.shortcutId ?: convTitle}"
         store.add(
             channel, sbn.packageName, key, convTitle, sender, text, sbn.postTime, false,
-            "$key|${n.`when`}|${text.hashCode()}", fuzzy = true,
+            "$key|${n.`when`}|${text.hashCode()}", fuzzy = true, image = bigPicture(n),
         )
         Replies.remember(key, n)
+    }
+
+    private fun bigPicture(n: Notification): ByteArray? {
+        BundleCompat.getParcelable(n.extras, Notification.EXTRA_PICTURE, Bitmap::class.java)?.let { return Thumbs.fromBitmap(it) }
+        if (Build.VERSION.SDK_INT >= 31) BundleCompat.getParcelable(n.extras, Notification.EXTRA_PICTURE_ICON, Icon::class.java)?.let { return Thumbs.fromIcon(this, it) }
+        return null
     }
 
     companion object {

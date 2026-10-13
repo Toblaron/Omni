@@ -95,9 +95,11 @@ object Telegram {
         prefs(app).edit().putBoolean("linked", false).apply()
     }
 
-    suspend fun sendText(chatId: Long, text: String): String? = errorOf(query(obj(
+    /** Sends now, or at [at] (epoch ms) using Telegram's own server-side scheduling. */
+    suspend fun sendText(chatId: Long, text: String, at: Long? = null): String? = errorOf(query(obj(
         "sendMessage",
         "chat_id" to chatId,
+        "options" to at?.let { obj("messageSendOptions", "scheduling_state" to obj("messageSchedulingStateSendAtDate", "send_date" to (it / 1000).toInt())) },
         "input_message_content" to obj("inputMessageText", "text" to obj("formattedText", "text" to text)),
     )))
 
@@ -114,8 +116,9 @@ object Telegram {
             "updateNewChat" -> o.getJSONObject("chat").let { chats[it.getLong("id")] = it.optString("title") }
             "updateChatTitle" -> chats[o.getLong("chat_id")] = o.optString("title")
             "updateNewMessage" -> o.getJSONObject("message").let { m ->
-                // our own sends arrive first as pending; they're stored on updateMessageSendSucceeded
-                if (!m.has("sending_state")) scope.launch { save(listOf(m)) }
+                // our own sends arrive first as pending; they're stored on updateMessageSendSucceeded.
+                // scheduled ones wait on Telegram's servers and arrive again when actually sent
+                if (!m.has("sending_state") && !m.has("scheduling_state")) scope.launch { save(listOf(m)) }
             }
             "updateMessageSendSucceeded" -> o.getJSONObject("message").let { m -> scope.launch { save(listOf(m)) } }
         }
