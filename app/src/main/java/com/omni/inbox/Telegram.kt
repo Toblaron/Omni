@@ -130,6 +130,7 @@ object Telegram {
                     "database_directory" to dir, "files_directory" to dir,
                     "use_file_database" to false, "use_chat_info_database" to true,
                     "use_message_database" to true, "use_secret_chats" to false,
+                    "database_encryption_key" to if (p.getBoolean("db_keyed", false)) dbKey() else "",
                     "api_id" to p.getInt("api_id", 0), "api_hash" to p.getString("api_hash", ""),
                     "system_language_code" to "en", "device_model" to "Omni Inbox",
                     "application_version" to "0.2",
@@ -142,7 +143,12 @@ object Telegram {
             "authorizationStateReady" -> {
                 auth.value = Auth.Ready
                 prefs(app).edit().putBoolean("linked", true).apply()
-                scope.launch { syncHistory() }
+                scope.launch {
+                    if (!prefs(app).getBoolean("db_keyed", false) &&
+                        errorOf(query(obj("setDatabaseEncryptionKey", "new_encryption_key" to dbKey()))) == null
+                    ) prefs(app).edit().putBoolean("db_keyed", true).apply()
+                    syncHistory()
+                }
             }
             "authorizationStateClosed" -> {
                 // after logOut the client is gone; a fresh one starts the login over
@@ -243,6 +249,9 @@ object Telegram {
     }
 
     // ---------- plumbing ----------
+
+    /** TDLib takes bytes as base64 in JSON. */
+    private fun dbKey() = android.util.Base64.encodeToString(Vault.secret(app, "tdlib"), android.util.Base64.NO_WRAP)
 
     private fun send(o: JSONObject) = JsonClient.td_send(clientId, o.toString())
 

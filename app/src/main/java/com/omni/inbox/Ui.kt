@@ -117,15 +117,22 @@ private fun Rule() = Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
 fun App() {
     val ctx = LocalContext.current
     val store = remember { Store.get(ctx) }
-    // "inbox", "telegram", or a conversation key
+    // "inbox", "telegram", "settings", "search", or a conversation key
     var route by rememberSaveable { mutableStateOf("inbox") }
-    BackHandler(route != "inbox") { route = "inbox" }
+    var back by rememberSaveable { mutableStateOf("inbox") }
+    fun go(to: String) { back = if (route == "search" || route == "settings") route else "inbox"; route = to }
+    fun up() { route = back; back = "inbox" }
+    val locked by AppLock.locked.collectAsState()
+    BackHandler(route != "inbox") { up() }
     Surface(Modifier.fillMaxSize(), color = Void) {
         Box(Modifier.safeDrawingPadding()) {
-            when (route) {
-                "inbox" -> InboxScreen(store, onOpen = { route = it }, onTelegram = { route = "telegram" })
-                "telegram" -> TelegramScreen { route = "inbox" }
-                else -> ConversationScreen(store, route) { route = "inbox" }
+            if (locked) LockScreen()
+            else when (route) {
+                "inbox" -> InboxScreen(store, onOpen = ::go, onTelegram = { go("telegram") }, onSearch = { go("search") }, onSettings = { go("settings") })
+                "telegram" -> TelegramScreen(::up)
+                "settings" -> SettingsScreen(onTelegram = { go("telegram") }, onBack = ::up)
+                "search" -> SearchScreen(store, onOpen = ::go, onBack = ::up)
+                else -> ConversationScreen(store, route, ::up)
             }
         }
     }
@@ -134,19 +141,26 @@ fun App() {
 // ---------- inbox ----------
 
 @Composable
-private fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () -> Unit) {
+private fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () -> Unit, onSearch: () -> Unit, onSettings: () -> Unit) {
     val version by store.changes.collectAsState()
     var filter by rememberSaveable { mutableStateOf<Channel?>(null) }
-    val conversations by produceState(emptyList<Conversation>(), version, filter) {
+    var replyOnly by rememberSaveable { mutableStateOf(false) }
+    val all by produceState(emptyList<Conversation>(), version, filter) {
         value = withContext(Dispatchers.IO) { store.conversations(filter) }
     }
+    val waiting = all.count { it.needsReply }
+    val conversations = if (replyOnly) all.filter { it.needsReply } else all
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 18.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Hud("Omni//Inbox", size = 22.sp, bold = true)
-                Hud("${conversations.size} channels open", size = 9.sp, color = CyanDim)
+                Hud("${all.size} channels · $waiting awaiting reply", size = 9.sp, color = CyanDim)
             }
+            HudButton("Find", onSearch)
+            Spacer(Modifier.width(6.dp))
+            HudButton("Sys", onSettings)
+            Spacer(Modifier.width(6.dp))
             TelegramBadge(onTelegram)
         }
         SetupCard()
@@ -154,8 +168,9 @@ private fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () -
             Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Chip("All", Cyan, filter == null) { filter = null }
-            Channel.entries.forEach { ch -> Chip(ch.label, Color(ch.color), filter == ch) { filter = ch } }
+            Chip("All", Cyan, filter == null && !replyOnly) { filter = null; replyOnly = false }
+            Chip("Reply · $waiting", Alert, replyOnly) { replyOnly = !replyOnly }
+            Channel.entries.forEach { ch -> Chip(ch.label, Color(ch.color), filter == ch) { filter = if (filter == ch) null else ch } }
         }
         Rule()
         if (conversations.isEmpty()) {
@@ -207,7 +222,13 @@ private fun ConversationRow(c: Conversation, onClick: () -> Unit) {
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(c.title, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (c.unread) Box(Modifier.padding(end = 6.dp).size(7.dp).background(Cyan, Tag))
+                Text(c.title, Modifier.weight(1f), fontWeight = if (c.unread) FontWeight.Bold else FontWeight.Normal,
+                    color = if (c.unread) Cyan else Cyan.copy(alpha = 0.85f), fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (c.needsReply) {
+                    Hud("↩ reply", size = 7.sp, color = Alert, modifier = Modifier.border(1.dp, Alert.copy(alpha = 0.6f), Tag).padding(horizontal = 5.dp, vertical = 2.dp))
+                    Spacer(Modifier.width(6.dp))
+                }
                 Hud(shortTime(c.lastTs), size = 9.sp, color = CyanDim)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -348,6 +369,8 @@ private fun ConversationScreen(store: Store, key: String, onBack: () -> Unit) {
     val conv by produceState<Conversation?>(null, version) { value = withContext(Dispatchers.IO) { store.conversation(key) } }
     val messages by produceState(emptyList<Msg>(), version) { value = withContext(Dispatchers.IO) { store.messages(key) } }
     val c = conv ?: return
+    LaunchedEffect(key, c.lastTs) { withContext(Dispatchers.IO) { store.markSeen(key) } }
+    val scope = rememberCoroutineScope()
 
     Column(Modifier.fillMaxSize().imePadding()) {
         Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -358,6 +381,7 @@ private fun ConversationScreen(store: Store, key: String, onBack: () -> Unit) {
                 Text(c.title, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Hud(c.channel.label, size = 8.sp, color = Color(c.channel.color))
             }
+            if (c.needsReply) TextButton(onClick = { scope.launch(Dispatchers.IO) { store.markDone(key) } }) { Hud("Done ✓", size = 9.sp, color = Alert) }
             c.pkg?.let { pkg -> TextButton(onClick = { openApp(ctx, pkg) }) { Hud("Open ↗", size = 9.sp) } }
         }
         Rule()
@@ -433,3 +457,98 @@ private fun openApp(ctx: Context, pkg: String) {
 private fun shortTime(ts: Long): String =
     if (DateUtils.isToday(ts)) DateFormat.getTimeInstance(DateFormat.SHORT).format(ts)
     else SimpleDateFormat("d MMM", Locale.getDefault()).format(ts)
+
+// ---------- small header button ----------
+
+@Composable
+private fun HudButton(label: String, onClick: () -> Unit) =
+    Surface(onClick = onClick, shape = Tag, color = Panel, border = BorderStroke(1.dp, Line)) {
+        Hud(label, size = 9.sp, color = Cyan, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+    }
+
+// ---------- lock ----------
+
+@Composable
+private fun LockScreen() {
+    val activity = LocalContext.current as? MainActivity
+    Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        Hud("Omni//Inbox", size = 24.sp, bold = true)
+        Spacer(Modifier.height(8.dp))
+        Hud("// Vault sealed", size = 10.sp, color = CyanDim)
+        Spacer(Modifier.height(32.dp))
+        NeonButton("Unlock") { activity?.unlock() }
+    }
+}
+
+// ---------- settings ----------
+
+@Composable
+private fun SettingsScreen(onTelegram: () -> Unit, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    var lockOn by remember { mutableStateOf(AppLock.isEnabled(ctx)) }
+    val lockAvailable = remember { AppLock.available(ctx) }
+    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onBack) { Text("<", fontFamily = Head, fontSize = 20.sp, color = Cyan) }
+            Hud("System", size = 16.sp, bold = true)
+        }
+        Rule()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Hud("App lock", size = 11.sp)
+                Text(
+                    if (lockAvailable) "Fingerprint, face or screen lock after 1 minute away. Also hides the app in recents and blocks screenshots."
+                    else "Set up a screen lock on the phone to enable this.",
+                    color = CyanDim, fontSize = 14.sp,
+                )
+            }
+            Switch(
+                checked = lockOn, enabled = lockAvailable,
+                onCheckedChange = { lockOn = it; AppLock.setEnabled(ctx, it); (ctx as? MainActivity)?.applySecureFlag() },
+                colors = SwitchDefaults.colors(checkedThumbColor = Void, checkedTrackColor = Cyan, uncheckedTrackColor = Panel, uncheckedBorderColor = Line),
+            )
+        }
+        Rule()
+        Column {
+            Hud("Encryption", size = 11.sp)
+            Text("Messages are stored in an encrypted database (SQLCipher, 256-bit AES) whose key is sealed by the phone's secure hardware. Telegram's own data is encrypted the same way.",
+                color = CyanDim, fontSize = 14.sp)
+        }
+        Rule()
+        NeonButton("Telegram uplink", onClick = onTelegram)
+    }
+}
+
+// ---------- search ----------
+
+@Composable
+private fun SearchScreen(store: Store, onOpen: (String) -> Unit, onBack: () -> Unit) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val hits by produceState(emptyList<SearchHit>(), query) {
+        kotlinx.coroutines.delay(150) // debounce typing
+        value = withContext(Dispatchers.IO) { runCatching { store.search(query) }.getOrDefault(emptyList()) }
+    }
+    Column(Modifier.fillMaxSize().imePadding()) {
+        Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onBack) { Text("<", fontFamily = Head, fontSize = 20.sp, color = Cyan) }
+            NeonField(query, { query = it }, "Search · from:anna · app:telegram", Modifier.weight(1f))
+        }
+        Hud(if (query.isBlank()) "// Scan all channels" else "${hits.size} hits", size = 9.sp, color = CyanDim, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+        Rule()
+        LazyColumn(Modifier.fillMaxSize()) {
+            items(hits, key = { "${it.convKey}|${it.ts}|${it.text.hashCode()}" }) { h ->
+                Column(Modifier.fillMaxWidth().clickable { onOpen(h.convKey) }.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Hud(h.channel.label, size = 8.sp, color = Color(h.channel.color))
+                        Spacer(Modifier.width(8.dp))
+                        Text(h.title + (h.sender?.takeIf { it != h.title }?.let { " · $it" } ?: ""), Modifier.weight(1f),
+                            fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Hud(shortTime(h.ts), size = 8.sp, color = CyanDim)
+                    }
+                    Text(h.text, color = CyanDim, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+                Rule()
+            }
+        }
+    }
+}
