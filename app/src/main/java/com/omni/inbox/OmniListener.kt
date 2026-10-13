@@ -15,12 +15,15 @@ class OmniListener : NotificationListenerService() {
     override fun onListenerConnected() {
         runCatching { activeNotifications }.getOrNull()?.forEach(::handle)
         SmsSync.start(this)
+        Telegram.start(this)
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) = handle(sbn)
 
     private fun handle(sbn: StatusBarNotification) {
         val channel = Channel.forPackage(sbn.packageName) ?: return
+        // with TDLib linked, Telegram arrives complete from the API instead
+        if (channel == Channel.TELEGRAM && Telegram.isLinked(this)) return
         val n = sbn.notification
         if (n.flags and (Notification.FLAG_GROUP_SUMMARY or Notification.FLAG_ONGOING_EVENT) != 0) return
         val store = Store.get(this)

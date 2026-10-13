@@ -11,58 +11,122 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CutCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.DateFormat
+import java.text.SimpleDateFormat
+import java.util.Locale
 
-private val Accent = Color(0xFFCBA6F7)
+// ---------- theme: solid black, cyan, angular ----------
+
+private val Void = Color(0xFF020406)
+private val Panel = Color(0xFF070D12)
+private val Line = Color(0xFF0C3440)
+private val Cyan = Color(0xFF00E5FF)
+private val CyanDim = Color(0xFF4FA9B8)
+private val Alert = Color(0xFFFF3D7F)
+
+private val Head = FontFamily(Font(R.font.orbitron, FontWeight.Normal), Font(R.font.orbitron, FontWeight.Bold))
+private val Body = FontFamily(Font(R.font.rajdhani_medium, FontWeight.Normal), Font(R.font.rajdhani_semibold, FontWeight.SemiBold))
+
+private val Angled = CutCornerShape(topStart = 0.dp, topEnd = 10.dp, bottomEnd = 0.dp, bottomStart = 10.dp)
+private val Tag = CutCornerShape(4.dp)
 
 @Composable
 fun OmniTheme(content: @Composable () -> Unit) {
+    val base = Typography()
+    fun TextStyle.body() = copy(fontFamily = Body)
     MaterialTheme(
         colorScheme = darkColorScheme(
-            primary = Accent, onPrimary = Color(0xFF1E1E2E),
-            background = Color(0xFF11111B), surface = Color(0xFF11111B),
-            surfaceVariant = Color(0xFF1E1E2E), onSurfaceVariant = Color(0xFFA6ADC8),
-            onBackground = Color(0xFFCDD6F4), onSurface = Color(0xFFCDD6F4),
+            primary = Cyan, onPrimary = Void, secondary = CyanDim,
+            background = Void, onBackground = Cyan, surface = Void, onSurface = Cyan,
+            surfaceVariant = Panel, onSurfaceVariant = CyanDim, outline = Line, error = Alert,
+        ),
+        typography = base.copy(
+            bodyLarge = base.bodyLarge.body().copy(fontSize = 17.sp), bodyMedium = base.bodyMedium.body(),
+            bodySmall = base.bodySmall.body(), titleMedium = base.titleMedium.body(),
+            labelLarge = base.labelLarge.copy(fontFamily = Head, letterSpacing = 1.5.sp),
         ),
         content = content,
     )
 }
 
+/** Orbitron, uppercase, tracked out: headings and labels. */
+@Composable
+private fun Hud(text: String, size: TextUnit = 11.sp, color: Color = Cyan, modifier: Modifier = Modifier, bold: Boolean = false) =
+    Text(text.uppercase(), modifier, color = color, fontFamily = Head, fontSize = size, letterSpacing = 2.sp,
+        fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis)
+
+@Composable
+private fun NeonButton(text: String, enabled: Boolean = true, onClick: () -> Unit) =
+    OutlinedButton(
+        onClick = onClick, enabled = enabled, shape = Angled, border = BorderStroke(1.dp, if (enabled) Cyan else Line),
+        colors = ButtonDefaults.outlinedButtonColors(containerColor = Cyan.copy(alpha = 0.08f), contentColor = Cyan),
+    ) { Text(text.uppercase(), fontFamily = Head, fontSize = 12.sp, letterSpacing = 1.5.sp) }
+
+@Composable
+private fun NeonField(value: String, onChange: (String) -> Unit, label: String, modifier: Modifier = Modifier,
+                      keyboard: KeyboardType = KeyboardType.Text, secret: Boolean = false, singleLine: Boolean = true) =
+    OutlinedTextField(
+        value = value, onValueChange = onChange, modifier = modifier, singleLine = singleLine, maxLines = 5, shape = Angled,
+        placeholder = { Text(label, color = CyanDim.copy(alpha = 0.6f)) },
+        keyboardOptions = KeyboardOptions(keyboardType = keyboard),
+        visualTransformation = if (secret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = Cyan, unfocusedBorderColor = Line, cursorColor = Cyan,
+            focusedTextColor = Cyan, unfocusedTextColor = Cyan, focusedContainerColor = Panel, unfocusedContainerColor = Panel,
+        ),
+    )
+
+@Composable
+private fun Rule() = Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
+
+// ---------- navigation ----------
+
 @Composable
 fun App() {
     val ctx = LocalContext.current
     val store = remember { Store.get(ctx) }
-    var open by rememberSaveable { mutableStateOf<String?>(null) }
-    BackHandler(open != null) { open = null }
-    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+    // "inbox", "telegram", or a conversation key
+    var route by rememberSaveable { mutableStateOf("inbox") }
+    BackHandler(route != "inbox") { route = "inbox" }
+    Surface(Modifier.fillMaxSize(), color = Void) {
         Box(Modifier.safeDrawingPadding()) {
-            val key = open
-            if (key == null) InboxScreen(store) { open = it }
-            else ConversationScreen(store, key) { open = null }
+            when (route) {
+                "inbox" -> InboxScreen(store, onOpen = { route = it }, onTelegram = { route = "telegram" })
+                "telegram" -> TelegramScreen { route = "inbox" }
+                else -> ConversationScreen(store, route) { route = "inbox" }
+            }
         }
     }
 }
@@ -70,7 +134,7 @@ fun App() {
 // ---------- inbox ----------
 
 @Composable
-private fun InboxScreen(store: Store, onOpen: (String) -> Unit) {
+private fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () -> Unit) {
     val version by store.changes.collectAsState()
     var filter by rememberSaveable { mutableStateOf<Channel?>(null) }
     val conversations by produceState(emptyList<Conversation>(), version, filter) {
@@ -78,63 +142,79 @@ private fun InboxScreen(store: Store, onOpen: (String) -> Unit) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        Text(
-            "Omni Inbox", Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp),
-            fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Accent,
-        )
+        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 18.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Hud("Omni//Inbox", size = 22.sp, bold = true)
+                Hud("${conversations.size} channels open", size = 9.sp, color = CyanDim)
+            }
+            TelegramBadge(onTelegram)
+        }
         SetupCard()
         Row(
-            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Chip("All", Accent, filter == null) { filter = null }
+            Chip("All", Cyan, filter == null) { filter = null }
             Channel.entries.forEach { ch -> Chip(ch.label, Color(ch.color), filter == ch) { filter = ch } }
         }
+        Rule()
         if (conversations.isEmpty()) {
             Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                Text(
-                    "No messages yet.\nNew messages from your apps will appear here as they arrive.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text("// NO SIGNAL\nNew messages from your apps appear here as they arrive.", color = CyanDim)
             }
         } else {
             LazyColumn(Modifier.fillMaxSize()) {
-                items(conversations, key = { it.key }) { c -> ConversationRow(c) { onOpen(c.key) } }
+                items(conversations, key = { it.key }) { c ->
+                    ConversationRow(c) { onOpen(c.key) }
+                    Rule()
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun TelegramBadge(onClick: () -> Unit) {
+    val auth by Telegram.auth.collectAsState()
+    val (label, color) = when (auth) {
+        Telegram.Auth.Ready -> "TG LINKED" to Cyan
+        Telegram.Auth.Unavailable -> "TG OFFLINE" to CyanDim
+        else -> "LINK TG" to Color(Channel.TELEGRAM.color)
+    }
+    Surface(onClick = onClick, shape = Tag, color = Panel, border = BorderStroke(1.dp, color.copy(alpha = 0.7f))) {
+        Hud(label, size = 9.sp, color = color, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
     }
 }
 
 @Composable
 private fun Chip(label: String, color: Color, selected: Boolean, onClick: () -> Unit) {
     Surface(
-        onClick = onClick, shape = RoundedCornerShape(50),
-        color = if (selected) color.copy(alpha = 0.25f) else MaterialTheme.colorScheme.surfaceVariant,
-        border = if (selected) androidx.compose.foundation.BorderStroke(1.dp, color) else null,
+        onClick = onClick, shape = Tag,
+        color = if (selected) color.copy(alpha = 0.14f) else Panel,
+        border = BorderStroke(1.dp, if (selected) color else Line),
     ) {
-        Text(label, Modifier.padding(horizontal = 14.dp, vertical = 7.dp), fontSize = 14.sp,
-            color = if (selected) color else MaterialTheme.colorScheme.onSurfaceVariant)
+        Hud(label, size = 10.sp, color = if (selected) color else CyanDim, modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp))
     }
 }
 
 @Composable
 private fun ConversationRow(c: Conversation, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Avatar(c.title, c.channel)
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(c.title, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(shortTime(c.lastTs), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(c.title, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Hud(shortTime(c.lastTs), size = 9.sp, color = CyanDim)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(c.channel.label, fontSize = 12.sp, color = Color(c.channel.color), fontWeight = FontWeight.Medium)
-                Text(" · ", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Hud(c.channel.label, size = 8.sp, color = Color(c.channel.color))
+                Spacer(Modifier.width(8.dp))
                 val preview = if (c.lastSender != null && c.lastSender != c.title) "${c.lastSender}: ${c.lastText}" else c.lastText
-                Text(preview, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(preview, fontSize = 15.sp, color = CyanDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -143,11 +223,11 @@ private fun ConversationRow(c: Conversation, onClick: () -> Unit) {
 @Composable
 private fun Avatar(title: String, channel: Channel) {
     Box(
-        Modifier.size(46.dp).clip(CircleShape).background(Color(channel.color).copy(alpha = 0.22f)),
+        Modifier.size(44.dp).border(1.dp, Color(channel.color).copy(alpha = 0.8f), Angled).background(Panel, Angled),
         contentAlignment = Alignment.Center,
     ) {
-        Text(title.firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "#", color = Color(channel.color),
-            fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        Text(title.firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "#", color = Cyan, fontFamily = Head,
+            fontWeight = FontWeight.Bold, fontSize = 17.sp)
     }
 }
 
@@ -166,23 +246,20 @@ private fun SetupCard() {
     }
     if (listenerOn && smsOn) return
 
-    Card(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).border(1.dp, Alert.copy(alpha = 0.6f), Angled)
+            .background(Panel, Angled).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Finish setup", fontWeight = FontWeight.Bold)
-            if (!listenerOn) {
-                Text("Allow notification access so WhatsApp, Telegram, Signal, Messenger and Snapchat messages show up here.",
-                    fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Button(onClick = { openListenerSettings(ctx) }) { Text("Allow notification access") }
-            }
-            if (!smsOn) {
-                Text("Allow SMS and contacts to show your text messages with names.",
-                    fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Button(onClick = {
-                    askPerms.launch(arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS, Manifest.permission.READ_CONTACTS))
-                }) { Text("Allow SMS & contacts") }
+        Hud("// Setup incomplete", color = Alert)
+        if (!listenerOn) {
+            Text("Allow notification access so WhatsApp, Signal, Messenger and Snapchat messages show up here.", color = CyanDim)
+            NeonButton("Notification access") { openListenerSettings(ctx) }
+        }
+        if (!smsOn) {
+            Text("Allow SMS and contacts to show your text messages with names.", color = CyanDim)
+            NeonButton("SMS & contacts") {
+                askPerms.launch(arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS, Manifest.permission.READ_CONTACTS))
             }
         }
     }
@@ -199,6 +276,69 @@ private fun openListenerSettings(ctx: Context) {
         .onFailure { ctx.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
 }
 
+// ---------- telegram link ----------
+
+@Composable
+private fun TelegramScreen(onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val auth by Telegram.auth.collectAsState()
+    val status by Telegram.status.collectAsState()
+    var input by rememberSaveable { mutableStateOf("") }
+    var input2 by rememberSaveable { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    LaunchedEffect(auth) { input = ""; input2 = ""; error = null }
+
+    fun submit(action: suspend () -> String?) {
+        busy = true
+        scope.launch { error = action(); busy = false }
+    }
+
+    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onBack) { Text("<", fontFamily = Head, fontSize = 20.sp, color = Cyan) }
+            Hud("Telegram uplink", size = 16.sp, bold = true)
+        }
+        Rule()
+        when (val a = auth) {
+            Telegram.Auth.Unavailable -> Text(
+                "The TDLib library isn't bundled in this build, so Telegram runs on notifications only.", color = CyanDim)
+            Telegram.Auth.NoCredentials -> {
+                Text("Get your own API ID and hash at my.telegram.org → API development tools (any app name works). They stay on this phone.", color = CyanDim)
+                NeonField(input, { input = it.filter(Char::isDigit) }, "api_id", Modifier.fillMaxWidth(), KeyboardType.Number)
+                NeonField(input2, { input2 = it.trim() }, "api_hash", Modifier.fillMaxWidth())
+                NeonButton("Connect", input.isNotBlank() && input2.length >= 16) {
+                    Telegram.saveCredentials(ctx, input.toInt(), input2)
+                }
+            }
+            Telegram.Auth.Starting -> Hud("Connecting…", color = CyanDim)
+            Telegram.Auth.WaitPhone -> {
+                Text("Phone number in international format.", color = CyanDim)
+                NeonField(input, { input = it }, "+46 70 123 45 67", Modifier.fillMaxWidth(), KeyboardType.Phone)
+                NeonButton("Send code", !busy && input.isNotBlank()) { submit { Telegram.submitPhone(input.trim()) } }
+            }
+            is Telegram.Auth.WaitCode -> {
+                Text("Enter the login code Telegram sent${a.phone?.let { " to +$it" } ?: ""} (check the Telegram app).", color = CyanDim)
+                NeonField(input, { input = it.filter(Char::isDigit) }, "code", Modifier.fillMaxWidth(), KeyboardType.Number)
+                NeonButton("Verify", !busy && input.isNotBlank()) { submit { Telegram.submitCode(input) } }
+            }
+            is Telegram.Auth.WaitPassword -> {
+                Text("Two-step verification password${a.hint?.let { " (hint: $it)" } ?: ""}.", color = CyanDim)
+                NeonField(input, { input = it }, "password", Modifier.fillMaxWidth(), secret = true)
+                NeonButton("Unlock", !busy && input.isNotBlank()) { submit { Telegram.submitPassword(input) } }
+            }
+            Telegram.Auth.Ready -> {
+                Hud("● Link active", color = Cyan)
+                Text("Full history and live messages come straight from Telegram. ${status}", color = CyanDim)
+                NeonButton("Log out", !busy) { submit { Telegram.logOut(); null } }
+            }
+            is Telegram.Auth.Unsupported -> Text("Telegram asked for a login step this app doesn't support yet: ${a.step}.", color = Alert)
+        }
+        error?.let { Text(it, color = Alert) }
+    }
+}
+
 // ---------- conversation ----------
 
 @Composable
@@ -211,21 +351,20 @@ private fun ConversationScreen(store: Store, key: String, onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize().imePadding()) {
         Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) { Text("←", fontSize = 22.sp) }
+            TextButton(onClick = onBack) { Text("<", fontFamily = Head, fontSize = 20.sp, color = Cyan) }
             Avatar(c.title, c.channel)
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(c.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(c.channel.label, fontSize = 12.sp, color = Color(c.channel.color))
+                Text(c.title, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Hud(c.channel.label, size = 8.sp, color = Color(c.channel.color))
             }
-            c.pkg?.let { pkg -> TextButton(onClick = { openApp(ctx, pkg) }) { Text("Open app") } }
+            c.pkg?.let { pkg -> TextButton(onClick = { openApp(ctx, pkg) }) { Hud("Open ↗", size = 9.sp) } }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-
+        Rule()
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), reverseLayout = true, contentPadding = PaddingValues(12.dp)) {
             items(messages.asReversed(), key = { it.id }) { m -> Bubble(m, c) }
         }
-
+        Rule()
         ReplyBar(ctx, store, c)
     }
 }
@@ -233,23 +372,16 @@ private fun ConversationScreen(store: Store, key: String, onBack: () -> Unit) {
 @Composable
 private fun Bubble(m: Msg, c: Conversation) {
     val mine = m.outgoing
-    Column(
-        Modifier.fillMaxWidth().padding(vertical = 3.dp),
-        horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
-    ) {
-        Surface(
-            shape = RoundedCornerShape(18.dp, 18.dp, if (mine) 4.dp else 18.dp, if (mine) 18.dp else 4.dp),
-            color = if (mine) Accent.copy(alpha = 0.85f) else MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.widthIn(max = 300.dp),
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
+        Column(
+            Modifier.widthIn(max = 300.dp)
+                .border(1.dp, if (mine) Cyan.copy(alpha = 0.8f) else Line, Angled)
+                .background(if (mine) Cyan.copy(alpha = 0.09f) else Panel, Angled)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                if (!mine && m.sender != null && m.sender != c.title) {
-                    Text(m.sender, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(c.channel.color))
-                }
-                Text(m.text, color = if (mine) Color(0xFF1E1E2E) else MaterialTheme.colorScheme.onSurface)
-                Text(shortTime(m.ts), fontSize = 10.sp, modifier = Modifier.align(Alignment.End),
-                    color = if (mine) Color(0xFF1E1E2E).copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            if (!mine && m.sender != null && m.sender != c.title) Hud(m.sender, size = 8.sp, color = Color(c.channel.color))
+            Text(m.text, color = Cyan)
+            Hud(shortTime(m.ts), size = 7.sp, color = CyanDim, modifier = Modifier.align(Alignment.End))
         }
     }
 }
@@ -257,40 +389,38 @@ private fun Bubble(m: Msg, c: Conversation) {
 @Composable
 private fun ReplyBar(ctx: Context, store: Store, c: Conversation) {
     val version by store.changes.collectAsState()
+    val tgAuth by Telegram.auth.collectAsState()
+    val scope = rememberCoroutineScope()
+    val tgChat = c.key.removePrefix("tg:").toLongOrNull()?.takeIf { c.key.startsWith("tg:") }
     val isSms = c.channel == Channel.SMS && c.address != null && c.key.startsWith("sms:")
-    val canReply = remember(version, c.key) { (isSms && SmsSync.canSend(ctx)) || Replies.canReply(c.key) }
+    val canReply = remember(version, c.key, tgAuth) {
+        (tgChat != null && tgAuth == Telegram.Auth.Ready) || (isSms && SmsSync.canSend(ctx)) || Replies.canReply(c.key)
+    }
     var text by rememberSaveable(c.key) { mutableStateOf("") }
 
     if (!canReply) {
-        Text(
-            "Replying works after a new message arrives from this chat (it uses the notification's Reply button). Use \"Open app\" meanwhile.",
-            Modifier.padding(16.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Text("// Reply channel opens when a new message arrives from this chat. Use OPEN ↗ meanwhile.",
+            Modifier.padding(16.dp), fontSize = 14.sp, color = CyanDim)
         return
     }
+    fun fail() = Toast.makeText(ctx, "Couldn't send - open ${c.channel.label} to reply", Toast.LENGTH_LONG).show()
+
     Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            value = text, onValueChange = { text = it }, modifier = Modifier.weight(1f),
-            placeholder = { Text("Message ${c.channel.label}") }, shape = RoundedCornerShape(24.dp), maxLines = 5,
-        )
+        NeonField(text, { text = it }, "Transmit via ${c.channel.label}", Modifier.weight(1f), singleLine = false)
         Spacer(Modifier.width(8.dp))
-        Button(
-            enabled = text.isNotBlank(), shape = CircleShape, contentPadding = PaddingValues(14.dp),
-            onClick = {
-                val body = text.trim()
-                val ok = if (isSms) runCatching { SmsSync.send(ctx, c.address!!, body) }.isSuccess
-                else Replies.send(ctx, c.key, body)
-                if (ok) {
-                    if (!isSms) {
-                        val now = System.currentTimeMillis()
-                        store.add(c.channel, c.pkg, c.key, c.title, null, body, now, true, "${c.key}|me|$now", fuzzy = true)
-                    }
-                    text = ""
-                } else {
-                    Toast.makeText(ctx, "Couldn't send - open ${c.channel.label} to reply", Toast.LENGTH_LONG).show()
+        NeonButton("Send", text.isNotBlank()) {
+            val body = text.trim()
+            text = ""
+            when {
+                tgChat != null -> scope.launch { Telegram.sendText(tgChat, body)?.let { fail() } }
+                isSms -> runCatching { SmsSync.send(ctx, c.address!!, body) }.onFailure { fail() }
+                Replies.send(ctx, c.key, body) -> {
+                    val now = System.currentTimeMillis()
+                    store.add(c.channel, c.pkg, c.key, c.title, null, body, now, true, "${c.key}|me|$now", fuzzy = true)
                 }
-            },
-        ) { Text("➤", fontSize = 18.sp) }
+                else -> { text = body; fail() }
+            }
+        }
     }
 }
 
@@ -302,4 +432,4 @@ private fun openApp(ctx: Context, pkg: String) {
 
 private fun shortTime(ts: Long): String =
     if (DateUtils.isToday(ts)) DateFormat.getTimeInstance(DateFormat.SHORT).format(ts)
-    else java.text.SimpleDateFormat("d MMM", java.util.Locale.getDefault()).format(ts)
+    else SimpleDateFormat("d MMM", Locale.getDefault()).format(ts)
