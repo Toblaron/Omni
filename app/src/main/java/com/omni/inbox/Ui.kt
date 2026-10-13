@@ -371,9 +371,28 @@ private fun SettingsScreen(onTelegram: () -> Unit, onStats: () -> Unit, onBack: 
             NeonButton("Import chat file") { pick.launch(arrayOf("text/plain", "application/zip")) }
         }
         Rule()
+        AiSetting()
+        Rule()
         KeepSetting()
         Rule()
         BackupSetting()
+    }
+}
+
+@Composable
+private fun AiSetting() {
+    val state by Assist.state.collectAsState()
+    val progress by Assist.progress.collectAsState()
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Hud("On-device AI", size = 11.sp)
+        Text(when (state) {
+            Assist.State.CHECKING -> "Checking…"
+            Assist.State.UNAVAILABLE -> "This phone doesn't offer Gemini Nano (Android AICore), so catch-up summaries and reply suggestions are off. Everything else works."
+            Assist.State.DOWNLOADABLE -> "Gemini Nano can run on this phone. Download the model (via AICore, Wi-Fi recommended) to get catch-up summaries and reply suggestions. Messages never leave the phone. $progress"
+            Assist.State.DOWNLOADING -> "Downloading model… $progress"
+            Assist.State.READY -> "Ready. ✦ in a chat summarizes it, ✦ Brief in the inbox lists who's waiting and why, and suggested replies appear when someone awaits you. All on this phone."
+        }, color = CyanDim, fontSize = 14.sp)
+        if (state == Assist.State.DOWNLOADABLE) NeonButton("Download model") { Assist.download() }
     }
 }
 

@@ -108,6 +108,18 @@ internal fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () 
                 Hud("Omni//Inbox", size = 22.sp, bold = true)
                 Hud("${live.size} channels · $waiting awaiting reply", size = 9.sp, color = CyanDim)
             }
+            val ai by Assist.state.collectAsState()
+            var briefing by remember { mutableStateOf(false) }
+            if (ai == Assist.State.READY && waiting > 0) {
+                HudButton("✦ Brief") { briefing = true }
+                Spacer(Modifier.width(6.dp))
+            }
+            if (briefing) AiDialog("Waiting on you", onDismiss = { briefing = false }) {
+                withContext(Dispatchers.IO) {
+                    val who = People.group(live).filter { it.needsReply }.take(8)
+                    Assist.brief(who.map { p -> p.name to store.messages(p.chats.filter { it.needsReply }.map { it.key }) })
+                }
+            }
             HudButton("Find", onSearch)
             Spacer(Modifier.width(6.dp))
             HudButton("Sys", onSettings)

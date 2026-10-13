@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -58,6 +59,7 @@ internal fun ConversationScreen(store: Store, key: String, focusId: Long, onBack
                 Text(c.title, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Hud(c.channel.label, size = 8.sp, color = Color(c.channel.color))
             }
+            CatchUpButton(c.title) { messages }
             if (c.needsReply) TextButton(onClick = { scope.launch(Dispatchers.IO) { store.markDone(key) } }) { Hud("Done ✓", size = 9.sp, color = Alert) }
             if (!c.isGroup) TextButton(onClick = { linking = true }) { Hud("Link", size = 9.sp) }
             if (c.pkg != null) TextButton(onClick = { Actions.openChat(ctx, c) }) { Hud("Open ↗", size = 9.sp) }
@@ -97,6 +99,7 @@ internal fun PersonScreen(store: Store, personKey: String, onOpenChat: (String) 
                 Text(p.name, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 AppTags(p.chats)
             }
+            CatchUpButton(p.name) { messages }
         }
         Rule()
         MessageList(Modifier.weight(1f), messages, chatOf, showApp = true, selection, focusId = 0L)
@@ -460,6 +463,7 @@ private fun ReplyBar(store: Store, c: Conversation) {
             Modifier.padding(16.dp), fontSize = 14.sp, color = CyanDim)
         return
     }
+    SuggestionChips(store, c) { text = it }
     Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
         NeonField(text, { text = it }, "Transmit via ${c.channel.label}", Modifier.weight(1f), singleLine = false)
         Spacer(Modifier.width(8.dp))
@@ -507,4 +511,49 @@ private fun ScheduleDialog(onDismiss: () -> Unit, onPick: (Long) -> Unit) {
         },
         confirmButton = { TextButton(onClick = onDismiss) { Hud("Cancel", size = 9.sp) } },
     )
+}
+
+// ---------- on-device AI ----------
+
+/** ✦: a short summary of the chat from Gemini Nano; hidden on phones without it. */
+@Composable
+private fun CatchUpButton(title: String, messages: () -> List<Msg>) {
+    val ai by Assist.state.collectAsState()
+    if (ai != Assist.State.READY) return
+    var open by remember { mutableStateOf(false) }
+    TextButton(onClick = { open = true }) { Hud("✦", size = 12.sp) }
+    if (open) AiDialog("Catch up · $title", onDismiss = { open = false }) { Assist.summarize(title, messages()) }
+}
+
+/** Shows the result of [load] (or a failure note) in the app's dialog style. */
+@Composable
+internal fun AiDialog(title: String, onDismiss: () -> Unit, load: suspend () -> String?) {
+    val text by produceState<String?>(null) { value = load() ?: "Couldn't generate that right now." }
+    AlertDialog(
+        onDismissRequest = onDismiss, containerColor = Panel, shape = Angled,
+        title = { Hud(title, size = 12.sp, bold = true) },
+        text = {
+            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                Text(text ?: "Thinking…", color = if (text == null) CyanDim else Cyan, fontSize = 16.sp)
+                Spacer(Modifier.height(10.dp))
+                Hud("✦ Gemini Nano · on this phone", size = 7.sp, color = CyanDim)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Hud("Close", size = 9.sp) } },
+    )
+}
+
+/** Up to three suggested replies when they're waiting on you; tapping one fills the box. */
+@Composable
+private fun SuggestionChips(store: Store, c: Conversation, onPick: (String) -> Unit) {
+    val ai by Assist.state.collectAsState()
+    if (ai != Assist.State.READY || !c.needsReply) return
+    val ideas by produceState(emptyList<String>(), c.key, c.lastTs) {
+        value = withContext(Dispatchers.IO) { Assist.replies(c.title, store.messages(c.key)) }
+    }
+    if (ideas.isEmpty()) return
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Hud("✦", size = 10.sp, modifier = Modifier.align(Alignment.CenterVertically))
+        ideas.forEach { SignalChip(it) { onPick(it) } }
+    }
 }
