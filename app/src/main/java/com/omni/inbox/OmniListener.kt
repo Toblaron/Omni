@@ -39,6 +39,7 @@ class OmniListener : NotificationListenerService() {
             val me = style.user.name?.toString()
             for (m in style.messages) {
                 val text = m.text?.toString()?.takeIf { it.isNotBlank() } ?: continue
+                if (channel == Channel.SNAPCHAT && Snapchat.isTyping(text)) continue
                 val sender = m.person?.name?.toString()
                 val outgoing = m.person == null || (me != null && sender == me)
                 store.add(
@@ -52,12 +53,18 @@ class OmniListener : NotificationListenerService() {
             return
         }
 
-        val text = n.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.takeIf { it.isNotBlank() } ?: return
+        var text = n.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.takeIf { it.isNotBlank() } ?: return
         if (SUMMARY.matches(text)) return
-        val convTitle = title ?: channel.label
+        var sender = title
+        if (channel == Channel.SNAPCHAT) {
+            // streaks, stories, Spotlight, friend requests… aren't conversations
+            if (!Snapchat.isChat(n) || Snapchat.isTyping(text)) return
+            Snapchat.splitSender(title, text).let { (s, t) -> sender = s; text = t }
+        }
+        val convTitle = sender ?: channel.label
         val key = "${sbn.packageName}:${n.shortcutId ?: convTitle}"
         store.add(
-            channel, sbn.packageName, key, convTitle, title, text, sbn.postTime, false,
+            channel, sbn.packageName, key, convTitle, sender, text, sbn.postTime, false,
             "$key|${n.`when`}|${text.hashCode()}", fuzzy = true,
         )
         Replies.remember(key, n)

@@ -372,7 +372,7 @@ private fun TelegramScreen(onBack: () -> Unit) {
             Telegram.Auth.Starting -> Hud("Connecting…", color = CyanDim)
             Telegram.Auth.WaitPhone -> {
                 Text("Phone number in international format.", color = CyanDim)
-                NeonField(input, { input = it }, "+46 70 123 45 67", Modifier.fillMaxWidth(), KeyboardType.Phone)
+                NeonField(input, { input = it }, "+47 412 34 567", Modifier.fillMaxWidth(), KeyboardType.Phone)
                 NeonButton("Send code", !busy && input.isNotBlank()) { submit { Telegram.submitPhone(input.trim()) } }
             }
             is Telegram.Auth.WaitCode -> {
