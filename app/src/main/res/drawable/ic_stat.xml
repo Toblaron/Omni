@@ -1,0 +1,11 @@
+<!-- notification icon: the two chat bubbles of the launcher icon, white -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="64" android:viewportHeight="64">
+    <group android:translateX="-22" android:translateY="-26">
+        <path android:fillColor="#FFFFFFFF"
+            android:pathData="M30,34h34a6,6 0,0 1,6 6v20a6,6 0,0 1,-6 6H44l-10,8v-8h-4a6,6 0,0 1,-6 -6V40a6,6 0,0 1,6 -6z" />
+        <path android:fillColor="#FFFFFFFF" android:fillAlpha="0.6"
+            android:pathData="M50,48h28a6,6 0,0 1,6 6v16a6,6 0,0 1,-6 6h-2v7l-9,-7H50a6,6 0,0 1,-6 -6V54a6,6 0,0 1,6 -6z" />
+    </group>
+</vector>

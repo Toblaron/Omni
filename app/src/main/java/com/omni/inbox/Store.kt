@@ -30,7 +30,18 @@ data class Conversation(
     val isGroup: Boolean = false,
     /** null = automatic (by name), -1 = never merge, >0 = manually linked person. */
     val personId: Long? = null,
+    val pinned: Boolean = false,
+    val archived: Boolean = false,
+    val muted: Boolean = false,
+    /** Hidden from the inbox until then (0 = not snoozed). */
+    val snoozeUntil: Long = 0,
+    val draft: String? = null,
 ) {
+    val snoozed get() = snoozeUntil > System.currentTimeMillis()
+    val hidden get() = archived || snoozed
+    /** Inbox order: a chat whose snooze ran out comes back at the top as if it just arrived. */
+    val sortTs get() = if (snoozeUntil in 1..System.currentTimeMillis()) maxOf(lastTs, snoozeUntil) else lastTs
+
     /** Chats sharing this key are the same human across apps. */
     val personKey: String
         get() = when {
@@ -43,18 +54,25 @@ data class Conversation(
 /** One human, possibly on several apps. */
 data class Person(val key: String, val name: String, val chats: List<Conversation>) {
     val latest get() = chats.first()
-    val unread get() = chats.any { it.unread }
-    val needsReply get() = chats.any { it.needsReply }
+    val unread get() = chats.any { it.unread && !it.muted }
+    val needsReply get() = chats.any { it.needsReply && !it.muted }
+    val pinned get() = chats.any { it.pinned }
+    val muted get() = chats.all { it.muted }
+    val hidden get() = chats.all { it.hidden }
+    val sortTs get() = chats.maxOf { it.sortTs }
+    val draft get() = chats.firstNotNullOfOrNull { it.draft?.takeIf(String::isNotBlank) }
 }
 
-data class SearchHit(val convKey: String, val channel: Channel, val title: String, val sender: String?, val text: String, val ts: Long)
+data class Reminder(val id: Long, val convKey: String, val at: Long, val text: String)
+
+data class SearchHit(val id: Long, val convKey: String, val channel: Channel, val title: String, val sender: String?, val text: String, val ts: Long)
 
 /**
  * All captured messages in a SQLCipher-encrypted database (passphrase from [Vault]).
  * [changes] bumps on every write so the UI can re-query.
  */
 class Store private constructor(private val ctx: Context, passphrase: ByteArray) :
-    SQLiteOpenHelper(ctx, DB_NAME, passphrase, null, 2, 0, null, null, true) {
+    SQLiteOpenHelper(ctx, DB_NAME, passphrase, null, VERSION, 0, null, null, true) {
 
     val changes = MutableStateFlow(0L)
 
@@ -75,15 +93,19 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
         db.execSQL("CREATE VIRTUAL TABLE messages_fts USING fts4(content=\"messages\", body, conv_title, sender)")
         db.execSQL("CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN INSERT INTO messages_fts(docid, body, conv_title, sender) VALUES (new.id, new.body, new.conv_title, new.sender); END")
         db.execSQL("CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN INSERT INTO messages_fts(messages_fts, docid, body, conv_title, sender) VALUES ('delete', old.id, old.body, old.conv_title, old.sender); END")
-        createDeleted(db)
+        onUpgrade(db, 1, VERSION)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
-        if (old < 2) createDeleted(db)
+        // uniq keys of messages the user deleted, so re-syncs (SMS provider, Telegram history) don't bring them back
+        if (old < 2) db.execSQL("CREATE TABLE deleted(uniq TEXT PRIMARY KEY)")
+        if (old < 3) {
+            // archived_ts: hidden until a message newer than it; snooze_until: hidden until then
+            listOf("pinned INTEGER NOT NULL DEFAULT 0", "archived_ts INTEGER NOT NULL DEFAULT 0", "muted INTEGER NOT NULL DEFAULT 0",
+                "snooze_until INTEGER NOT NULL DEFAULT 0", "draft TEXT").forEach { db.execSQL("ALTER TABLE conv_state ADD COLUMN $it") }
+            db.execSQL("CREATE TABLE reminders(id INTEGER PRIMARY KEY AUTOINCREMENT, conv_key TEXT NOT NULL, at INTEGER NOT NULL, text TEXT NOT NULL)")
+        }
     }
-
-    // uniq keys of messages the user deleted, so re-syncs (SMS provider, Telegram history) don't bring them back
-    private fun createDeleted(db: SQLiteDatabase) = db.execSQL("CREATE TABLE deleted(uniq TEXT PRIMARY KEY)")
 
     /**
      * Inserts a message unless [uniq] was seen before. With [fuzzy], also skips it when the same
@@ -124,7 +146,8 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
         SELECT m.conv_key, m.channel, m.pkg, m.conv_title, m.body, m.sender, MAX(m.ts), m.address,
                MAX(CASE WHEN m.outgoing=0 THEN m.ts END), MAX(CASE WHEN m.outgoing=1 THEN m.ts END),
                IFNULL(s.seen_ts, 0), IFNULL(s.done_ts, 0),
-               COUNT(DISTINCT CASE WHEN m.outgoing=0 THEN m.sender END), s.person_id
+               COUNT(DISTINCT CASE WHEN m.outgoing=0 THEN m.sender END), s.person_id,
+               IFNULL(s.pinned, 0), IFNULL(s.archived_ts, 0), IFNULL(s.muted, 0), IFNULL(s.snooze_until, 0), s.draft
         FROM messages m LEFT JOIN conv_state s ON s.conv_key = m.conv_key"""
 
     // SQLite returns the bare columns from the row that holds MAX(ts)
@@ -139,6 +162,11 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
             needsReply = lastIn > lastOut && lastIn > c.getLong(11),
             isGroup = c.getInt(12) > 1,
             personId = if (c.isNull(13)) null else c.getLong(13),
+            pinned = c.getInt(14) == 1,
+            archived = c.getLong(15) >= lastTs,
+            muted = c.getInt(16) == 1,
+            snoozeUntil = c.getLong(17),
+            draft = c.getString(18),
         )
     }
 
@@ -148,6 +176,9 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
         return readableDatabase.rawQuery("$conversationSelect $where GROUP BY m.conv_key ORDER BY MAX(m.ts) DESC", args)
             .use { c -> buildList { while (c.moveToNext()) add(readConversation(c)) } }
     }
+
+    /** Inbox order: pinned first, then newest (a finished snooze counts as new). */
+    fun inbox(): List<Conversation> = conversations(null).sortedWith(compareByDescending<Conversation> { it.pinned }.thenByDescending { it.sortTs })
 
     fun conversation(key: String): Conversation? =
         readableDatabase.rawQuery("$conversationSelect WHERE m.conv_key=? GROUP BY m.conv_key", arrayOf(key))
@@ -216,6 +247,7 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
         val args = keys.toTypedArray<Any>()
         purge("conv_key IN ($marks)", args) {
             writableDatabase.execSQL("DELETE FROM conv_state WHERE conv_key IN ($marks)", args)
+            writableDatabase.execSQL("DELETE FROM reminders WHERE conv_key IN ($marks)", args)
         }
     }
 
@@ -233,6 +265,46 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
 
     private fun touchState(key: String) =
         writableDatabase.execSQL("INSERT OR IGNORE INTO conv_state(conv_key) VALUES (?)", arrayOf<Any>(key))
+
+    private fun setState(keys: Collection<String>, assignment: String, vararg args: Any) {
+        if (keys.isEmpty()) return
+        inTransaction {
+            keys.forEach { key ->
+                touchState(key)
+                writableDatabase.execSQL("UPDATE conv_state SET $assignment WHERE conv_key=?", arrayOf(*args, key))
+            }
+        }
+        changed()
+    }
+
+    fun setPinned(keys: Collection<String>, on: Boolean) = setState(keys, "pinned=?", if (on) 1 else 0)
+    fun setMuted(keys: Collection<String>, on: Boolean) = setState(keys, "muted=?", if (on) 1 else 0)
+    /** Archived chats come back on their own when a newer message arrives. */
+    fun setArchived(keys: Collection<String>, on: Boolean) = setState(keys, "archived_ts=?", if (on) System.currentTimeMillis() else 0L)
+    fun snooze(keys: Collection<String>, until: Long) = setState(keys, "snooze_until=?", until)
+
+    /** Saved quietly: no [changes] bump, so typing doesn't re-query every screen. */
+    fun saveDraft(key: String, text: String) {
+        touchState(key)
+        writableDatabase.execSQL("UPDATE conv_state SET draft=? WHERE conv_key=?", arrayOf<Any?>(text.ifBlank { null }, key))
+    }
+
+    fun draft(key: String): String =
+        readableDatabase.rawQuery("SELECT draft FROM conv_state WHERE conv_key=?", arrayOf(key))
+            .use { if (it.moveToFirst()) it.getString(0).orEmpty() else "" }
+
+    // ---------- reminders ----------
+
+    fun addReminder(convKey: String, at: Long, text: String): Long =
+        writableDatabase.insert("reminders", null, ContentValues().apply { put("conv_key", convKey); put("at", at); put("text", text) })
+
+    fun reminder(id: Long): Reminder? = reminders("id=?", arrayOf(id.toString())).firstOrNull()
+    fun pendingReminders(): List<Reminder> = reminders("at > ?", arrayOf(System.currentTimeMillis().toString()))
+    fun deleteReminder(id: Long) = writableDatabase.execSQL("DELETE FROM reminders WHERE id=?", arrayOf<Any>(id))
+
+    private fun reminders(where: String, args: Array<String>) =
+        readableDatabase.rawQuery("SELECT id, conv_key, at, text FROM reminders WHERE $where ORDER BY at", args)
+            .use { c -> buildList { while (c.moveToNext()) add(Reminder(c.getLong(0), c.getString(1), c.getLong(2), c.getString(3))) } }
 
     fun markSeen(key: String) {
         touchState(key)
@@ -275,15 +347,16 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
         app?.let { where += "m.channel=?"; args += it.name }
         if (where.isEmpty()) return emptyList()
         return readableDatabase.rawQuery(
-            "SELECT m.conv_key, m.channel, m.conv_title, m.sender, m.body, m.ts FROM messages m WHERE ${where.joinToString(" AND ")} ORDER BY m.ts DESC LIMIT $limit",
+            "SELECT m.conv_key, m.channel, m.conv_title, m.sender, m.body, m.ts, m.id FROM messages m WHERE ${where.joinToString(" AND ")} ORDER BY m.ts DESC LIMIT $limit",
             args.toTypedArray(),
         ).use { c ->
-            buildList { while (c.moveToNext()) add(SearchHit(c.getString(0), Channel.valueOf(c.getString(1)), c.getString(2), c.getString(3), c.getString(4), c.getLong(5))) }
+            buildList { while (c.moveToNext()) add(SearchHit(c.getLong(6), c.getString(0), Channel.valueOf(c.getString(1)), c.getString(2), c.getString(3), c.getString(4), c.getLong(5))) }
         }
     }
 
     companion object {
         private const val DB_NAME = "omni-vault.db"
+        private const val VERSION = 3
         private const val LEGACY_DB = "omni.db"
 
         @Volatile private var instance: Store? = null

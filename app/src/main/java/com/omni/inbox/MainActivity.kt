@@ -21,11 +21,18 @@ class MainActivity : FragmentActivity() {
         applySecureFlag()
         setContent { OmniTheme { App() } }
         handleShare(intent)
+        handleOpen(intent)
     }
 
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         handleShare(intent)
+        handleOpen(intent)
+    }
+
+    /** A reminder notification tapped: show that chat. */
+    private fun handleOpen(intent: android.content.Intent?) {
+        intent?.getStringExtra(Reminders.EXTRA_OPEN)?.let { openRequest.value = it }
     }
 
     /** A WhatsApp chat export shared into the app. */
@@ -80,6 +87,8 @@ class MainActivity : FragmentActivity() {
 
     companion object {
         val resumed = MutableStateFlow(0)
+        /** Conversation key to open, consumed by the UI. */
+        val openRequest = MutableStateFlow<String?>(null)
     }
 }
 

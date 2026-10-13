@@ -50,18 +50,18 @@ import java.util.Locale
 
 // ---------- theme: solid black, cyan, angular ----------
 
-private val Void = Color(0xFF020406)
-private val Panel = Color(0xFF070D12)
-private val Line = Color(0xFF0C3440)
-private val Cyan = Color(0xFF00E5FF)
-private val CyanDim = Color(0xFF4FA9B8)
-private val Alert = Color(0xFFFF3D7F)
+internal val Void = Color(0xFF020406)
+internal val Panel = Color(0xFF070D12)
+internal val Line = Color(0xFF0C3440)
+internal val Cyan = Color(0xFF00E5FF)
+internal val CyanDim = Color(0xFF4FA9B8)
+internal val Alert = Color(0xFFFF3D7F)
 
-private val Head = FontFamily(Font(R.font.orbitron, FontWeight.Normal), Font(R.font.orbitron, FontWeight.Bold))
-private val Body = FontFamily(Font(R.font.rajdhani_medium, FontWeight.Normal), Font(R.font.rajdhani_semibold, FontWeight.SemiBold))
+internal val Head = FontFamily(Font(R.font.orbitron, FontWeight.Normal), Font(R.font.orbitron, FontWeight.Bold))
+internal val Body = FontFamily(Font(R.font.rajdhani_medium, FontWeight.Normal), Font(R.font.rajdhani_semibold, FontWeight.SemiBold))
 
-private val Angled = CutCornerShape(topStart = 0.dp, topEnd = 10.dp, bottomEnd = 0.dp, bottomStart = 10.dp)
-private val Tag = CutCornerShape(4.dp)
+internal val Angled = CutCornerShape(topStart = 0.dp, topEnd = 10.dp, bottomEnd = 0.dp, bottomStart = 10.dp)
+internal val Tag = CutCornerShape(4.dp)
 
 @Composable
 fun OmniTheme(content: @Composable () -> Unit) {
@@ -84,19 +84,19 @@ fun OmniTheme(content: @Composable () -> Unit) {
 
 /** Orbitron, uppercase, tracked out: headings and labels. */
 @Composable
-private fun Hud(text: String, size: TextUnit = 11.sp, color: Color = Cyan, modifier: Modifier = Modifier, bold: Boolean = false) =
+internal fun Hud(text: String, size: TextUnit = 11.sp, color: Color = Cyan, modifier: Modifier = Modifier, bold: Boolean = false) =
     Text(text.uppercase(), modifier, color = color, fontFamily = Head, fontSize = size, letterSpacing = 2.sp,
         fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis)
 
 @Composable
-private fun NeonButton(text: String, enabled: Boolean = true, onClick: () -> Unit) =
+internal fun NeonButton(text: String, enabled: Boolean = true, onClick: () -> Unit) =
     OutlinedButton(
         onClick = onClick, enabled = enabled, shape = Angled, border = BorderStroke(1.dp, if (enabled) Cyan else Line),
         colors = ButtonDefaults.outlinedButtonColors(containerColor = Cyan.copy(alpha = 0.08f), contentColor = Cyan),
     ) { Text(text.uppercase(), fontFamily = Head, fontSize = 12.sp, letterSpacing = 1.5.sp) }
 
 @Composable
-private fun NeonField(value: String, onChange: (String) -> Unit, label: String, modifier: Modifier = Modifier,
+internal fun NeonField(value: String, onChange: (String) -> Unit, label: String, modifier: Modifier = Modifier,
                       keyboard: KeyboardType = KeyboardType.Text, secret: Boolean = false, singleLine: Boolean = true) =
     OutlinedTextField(
         value = value, onValueChange = onChange, modifier = modifier, singleLine = singleLine, maxLines = 5, shape = Angled,
@@ -110,7 +110,7 @@ private fun NeonField(value: String, onChange: (String) -> Unit, label: String, 
     )
 
 @Composable
-private fun Rule() = Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
+internal fun Rule() = Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
 
 // ---------- navigation ----------
 
@@ -124,9 +124,13 @@ fun App() {
     // "inbox", "telegram", "settings", "search", or a conversation key
     var route by rememberSaveable { mutableStateOf("inbox") }
     var back by rememberSaveable { mutableStateOf("inbox") }
-    fun go(to: String) { back = if (route == "search" || route == "settings") route else "inbox"; route = to }
-    fun up() { route = back; back = "inbox" }
+    // message to scroll to and highlight when a chat opens from search
+    var focus by rememberSaveable { mutableLongStateOf(0L) }
+    fun go(to: String, focusId: Long = 0L) { back = if (route == "search" || route == "settings") route else "inbox"; route = to; focus = focusId }
+    fun up() { route = back; back = "inbox"; focus = 0L }
     val locked by AppLock.locked.collectAsState()
+    val openRequest by MainActivity.openRequest.collectAsState()
+    LaunchedEffect(openRequest) { openRequest?.let { go(it); MainActivity.openRequest.value = null } }
     BackHandler(route != "inbox") { up() }
     Surface(Modifier.fillMaxSize(), color = Void) {
         Box(Modifier.safeDrawingPadding()) {
@@ -134,97 +138,21 @@ fun App() {
             if (locked) LockScreen()
             else if (importing != null) ImportScreen(importing!!) { key -> ImportState.clear(); if (key != null) go(key) }
             else when (route) {
-                "inbox" -> InboxScreen(store, onOpen = ::go, onTelegram = { go("telegram") }, onSearch = { go("search") }, onSettings = { go("settings") })
+                "inbox" -> InboxScreen(store, onOpen = { go(it) }, onTelegram = { go("telegram") }, onSearch = { go("search") }, onSettings = { go("settings") })
                 "telegram" -> TelegramScreen(::up)
                 "settings" -> SettingsScreen(onTelegram = { go("telegram") }, onBack = ::up)
                 "search" -> SearchScreen(store, onOpen = ::go, onBack = ::up)
-                in Regex("person:.*") -> PersonScreen(store, route.removePrefix("person:"), onOpenChat = ::go, onBack = ::up)
-                else -> ConversationScreen(store, route, ::up)
+                in Regex("person:.*") -> PersonScreen(store, route.removePrefix("person:"), onOpenChat = { go(it) }, onBack = ::up)
+                else -> ConversationScreen(store, route, focus, ::up)
             }
         }
     }
 }
 
-// ---------- inbox ----------
+// ---------- shared widgets ----------
 
 @Composable
-private fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () -> Unit, onSearch: () -> Unit, onSettings: () -> Unit) {
-    val version by store.changes.collectAsState()
-    var filter by rememberSaveable { mutableStateOf<Channel?>(null) }
-    var replyOnly by rememberSaveable { mutableStateOf(false) }
-    var peopleMode by rememberSaveable { mutableStateOf(true) }
-    val all by produceState(emptyList<Conversation>(), version, filter) {
-        value = withContext(Dispatchers.IO) { store.conversations(filter) }
-    }
-    val waiting = all.count { it.needsReply }
-    val conversations = if (replyOnly) all.filter { it.needsReply } else all
-    val people = remember(conversations) { conversations.groupBy { it.personKey }.map { (k, chats) -> Person(k, chats.first().title, chats) } }
-
-    // long-press selection: person keys in people mode, chat keys otherwise
-    val scope = rememberCoroutineScope()
-    val picked = remember { mutableStateSetOf<String>() }
-    LaunchedEffect(peopleMode, people) {
-        val live = if (peopleMode) people.mapTo(HashSet()) { it.key } else conversations.mapTo(HashSet()) { it.key }
-        picked.retainAll(live)
-    }
-    BackHandler(picked.isNotEmpty()) { picked.clear() }
-    val selection = Selection(picked, "chat") {
-        val keys = if (peopleMode) people.filter { it.key in picked }.flatMap { p -> p.chats.map { it.key } } else picked.toList()
-        picked.clear()
-        scope.launch(Dispatchers.IO) { store.deleteConversations(keys) }
-    }
-
-    Column(Modifier.fillMaxSize()) {
-        if (selection.active) SelectionBar(selection)
-        else Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 18.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Hud("Omni//Inbox", size = 22.sp, bold = true)
-                Hud("${all.size} channels · $waiting awaiting reply", size = 9.sp, color = CyanDim)
-            }
-            HudButton("Find", onSearch)
-            Spacer(Modifier.width(6.dp))
-            HudButton("Sys", onSettings)
-            Spacer(Modifier.width(6.dp))
-            TelegramBadge(onTelegram)
-        }
-        SetupCard()
-        Row(
-            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Chip("All", Cyan, filter == null && !replyOnly) { filter = null; replyOnly = false }
-            Chip("Reply · $waiting", Alert, replyOnly) { replyOnly = !replyOnly }
-            Chip(if (peopleMode) "People" else "Chats", CyanDim, peopleMode) { peopleMode = !peopleMode; picked.clear() }
-            Channel.entries.forEach { ch -> Chip(ch.label, Color(ch.color), filter == ch) { filter = if (filter == ch) null else ch } }
-        }
-        Rule()
-        if (conversations.isEmpty()) {
-            Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                Text("// NO SIGNAL\nNew messages from your apps appear here as they arrive.", color = CyanDim)
-            }
-        } else {
-            LazyColumn(Modifier.fillMaxSize()) {
-                if (peopleMode) {
-                    items(people, key = { it.key }) { p ->
-                        PersonRow(p, p.key in picked, onLongClick = { selection.toggle(p.key) }) {
-                            if (selection.active) selection.toggle(p.key)
-                            else if (p.chats.size == 1) onOpen(p.latest.key) else onOpen("person:${p.key}")
-                        }
-                        Rule()
-                    }
-                } else items(conversations, key = { it.key }) { c ->
-                    ConversationRow(c, c.key in picked, onLongClick = { selection.toggle(c.key) }) {
-                        if (selection.active) selection.toggle(c.key) else onOpen(c.key)
-                    }
-                    Rule()
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TelegramBadge(onClick: () -> Unit) {
+internal fun TelegramBadge(onClick: () -> Unit) {
     val auth by Telegram.auth.collectAsState()
     val (label, color) = when (auth) {
         Telegram.Auth.Ready -> "TG LINKED" to Cyan
@@ -237,7 +165,7 @@ private fun TelegramBadge(onClick: () -> Unit) {
 }
 
 @Composable
-private fun Chip(label: String, color: Color, selected: Boolean, onClick: () -> Unit) {
+internal fun Chip(label: String, color: Color, selected: Boolean, onClick: () -> Unit) {
     Surface(
         onClick = onClick, shape = Tag,
         color = if (selected) color.copy(alpha = 0.14f) else Panel,
@@ -248,37 +176,7 @@ private fun Chip(label: String, color: Color, selected: Boolean, onClick: () -> 
 }
 
 @Composable
-private fun ConversationRow(c: Conversation, selected: Boolean, onLongClick: () -> Unit, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .background(if (selected) Cyan.copy(alpha = 0.12f) else Color.Transparent).padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Avatar(c.title, c.channel)
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (c.unread) Box(Modifier.padding(end = 6.dp).size(7.dp).background(Cyan, Tag))
-                Text(c.title, Modifier.weight(1f), fontWeight = if (c.unread) FontWeight.Bold else FontWeight.Normal,
-                    color = if (c.unread) Cyan else Cyan.copy(alpha = 0.85f), fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (c.needsReply) {
-                    Hud("↩ reply", size = 7.sp, color = Alert, modifier = Modifier.border(1.dp, Alert.copy(alpha = 0.6f), Tag).padding(horizontal = 5.dp, vertical = 2.dp))
-                    Spacer(Modifier.width(6.dp))
-                }
-                Hud(shortTime(c.lastTs), size = 9.sp, color = CyanDim)
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Hud(c.channel.label, size = 8.sp, color = Color(c.channel.color))
-                Spacer(Modifier.width(8.dp))
-                val preview = if (c.lastSender != null && c.lastSender != c.title) "${c.lastSender}: ${c.lastText}" else c.lastText
-                Text(preview, fontSize = 15.sp, color = CyanDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-    }
-}
-
-@Composable
-private fun Avatar(title: String, channel: Channel) {
+internal fun Avatar(title: String, channel: Channel) {
     Box(
         Modifier.size(44.dp).border(1.dp, Color(channel.color).copy(alpha = 0.8f), Angled).background(Panel, Angled),
         contentAlignment = Alignment.Center,
@@ -291,7 +189,7 @@ private fun Avatar(title: String, channel: Channel) {
 // ---------- setup ----------
 
 @Composable
-private fun SetupCard() {
+internal fun SetupCard() {
     val ctx = LocalContext.current
     val resumed by MainActivity.resumed.collectAsState()
     var permTick by remember { mutableIntStateOf(0) }
@@ -396,170 +294,16 @@ private fun TelegramScreen(onBack: () -> Unit) {
     }
 }
 
-// ---------- conversation ----------
+// ---------- time ----------
 
-@Composable
-private fun ConversationScreen(store: Store, key: String, onBack: () -> Unit) {
-    val ctx = LocalContext.current
-    val version by store.changes.collectAsState()
-    val conv by produceState<Conversation?>(null, version) { value = withContext(Dispatchers.IO) { store.conversation(key) } }
-    val messages by produceState(emptyList<Msg>(), version) { value = withContext(Dispatchers.IO) { store.messages(key) } }
-    val c = conv ?: return
-    LaunchedEffect(key, c.lastTs) { withContext(Dispatchers.IO) { store.markSeen(key) } }
-    val scope = rememberCoroutineScope()
-    var linking by remember { mutableStateOf(false) }
-    if (linking) LinkDialog(store, c, onDismiss = { linking = false })
-    val selection = rememberSelection(store, messages, onBack)
-
-    Column(Modifier.fillMaxSize().imePadding()) {
-        if (selection.active) SelectionBar(selection)
-        else Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) { Text("<", fontFamily = Head, fontSize = 20.sp, color = Cyan) }
-            Avatar(c.title, c.channel)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(c.title, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Hud(c.channel.label, size = 8.sp, color = Color(c.channel.color))
-            }
-            if (c.needsReply) TextButton(onClick = { scope.launch(Dispatchers.IO) { store.markDone(key) } }) { Hud("Done ✓", size = 9.sp, color = Alert) }
-            if (!c.isGroup) TextButton(onClick = { linking = true }) { Hud("Link", size = 9.sp) }
-            c.pkg?.let { pkg -> TextButton(onClick = { openApp(ctx, pkg) }) { Hud("Open ↗", size = 9.sp) } }
-        }
-        Rule()
-        LazyColumn(Modifier.weight(1f).fillMaxWidth(), reverseLayout = true, contentPadding = PaddingValues(12.dp)) {
-            items(messages.asReversed(), key = { it.id }) { m -> Bubble(m, c, selection = selection) }
-        }
-        Rule()
-        ReplyBar(ctx, store, c)
-    }
-}
-
-@Composable
-private fun Bubble(m: Msg, c: Conversation, showApp: Boolean = false, selection: Selection<Long>) {
-    val mine = m.outgoing
-    val picked = m.id in selection.ids
-    Column(
-        Modifier.fillMaxWidth()
-            .combinedClickable(
-                interactionSource = null, indication = null,
-                onClick = { if (selection.active) selection.toggle(m.id) },
-                onLongClick = { selection.toggle(m.id) },
-            )
-            .background(if (picked) Cyan.copy(alpha = 0.12f) else Color.Transparent)
-            .padding(vertical = 4.dp),
-        horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
-    ) {
-        Column(
-            Modifier.widthIn(max = 300.dp)
-                .border(1.dp, if (picked) Alert else if (mine) Cyan.copy(alpha = 0.8f) else Line, Angled)
-                .background(if (mine) Cyan.copy(alpha = 0.09f) else Panel, Angled)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-        ) {
-            if (showApp) Hud(c.channel.label + if (!mine && m.sender != null && m.sender != c.title) " · ${m.sender}" else "", size = 7.sp, color = Color(c.channel.color))
-            else if (!mine && m.sender != null && m.sender != c.title) Hud(m.sender, size = 8.sp, color = Color(c.channel.color))
-            Text(m.text, color = Cyan)
-            Hud(shortTime(m.ts), size = 7.sp, color = CyanDim, modifier = Modifier.align(Alignment.End))
-        }
-    }
-}
-
-/** Long-press-to-select state for a list; [delete] removes the picked items. */
-private class Selection<T>(val ids: MutableSet<T>, val noun: String, val delete: () -> Unit) {
-    val active get() = ids.isNotEmpty()
-    fun toggle(id: T) { if (!ids.remove(id)) ids.add(id) }
-}
-
-/** [onEmpty] runs when a delete leaves no messages, since the chat itself is then gone. */
-@Composable
-private fun rememberSelection(store: Store, messages: List<Msg>, onEmpty: () -> Unit): Selection<Long> {
-    val scope = rememberCoroutineScope()
-    val ids = remember { mutableStateSetOf<Long>() }
-    // drop ids that vanished (deleted elsewhere, or after our own delete)
-    LaunchedEffect(messages) { val live = messages.mapTo(HashSet()) { it.id }; ids.retainAll(live) }
-    BackHandler(ids.isNotEmpty()) { ids.clear() }
-    return remember(messages) {
-        Selection(ids, "message") {
-            val doomed = ids.toList()
-            val emptied = messages.all { it.id in ids }
-            ids.clear()
-            scope.launch {
-                withContext(Dispatchers.IO) { store.delete(doomed) }
-                if (emptied) onEmpty()
-            }
-        }
-    }
-}
-
-@Composable
-private fun SelectionBar(selection: Selection<*>) {
-    var confirm by remember { mutableStateOf(false) }
-    val n = selection.ids.size
-    if (confirm) AlertDialog(
-        onDismissRequest = { confirm = false }, containerColor = Panel, shape = Angled,
-        title = { Hud("Delete $n ${selection.noun}${if (n == 1) "" else "s"}?", size = 12.sp, bold = true) },
-        text = { Text("Removed from Omni Inbox only. They stay in the original app.", color = CyanDim, fontSize = 14.sp) },
-        confirmButton = { TextButton(onClick = { confirm = false; selection.delete() }) { Hud("Delete", size = 9.sp, color = Alert) } },
-        dismissButton = { TextButton(onClick = { confirm = false }) { Hud("Cancel", size = 9.sp) } },
-    )
-    Row(Modifier.fillMaxWidth().padding(8.dp).heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = { selection.ids.clear() }) { Text("✕", fontFamily = Head, fontSize = 18.sp, color = Cyan) }
-        Hud("$n selected", size = 14.sp, bold = true, modifier = Modifier.weight(1f))
-        TextButton(onClick = { confirm = true }) { Hud("Delete", size = 10.sp, color = Alert) }
-    }
-}
-
-@Composable
-private fun ReplyBar(ctx: Context, store: Store, c: Conversation) {
-    val version by store.changes.collectAsState()
-    val tgAuth by Telegram.auth.collectAsState()
-    val scope = rememberCoroutineScope()
-    val tgChat = c.key.removePrefix("tg:").toLongOrNull()?.takeIf { c.key.startsWith("tg:") }
-    val isSms = c.channel == Channel.SMS && c.address != null && c.key.startsWith("sms:")
-    val canReply = remember(version, c.key, tgAuth) {
-        (tgChat != null && tgAuth == Telegram.Auth.Ready) || (isSms && SmsSync.canSend(ctx)) || Replies.canReply(c.key)
-    }
-    var text by rememberSaveable(c.key) { mutableStateOf("") }
-
-    if (!canReply) {
-        Text("// Reply channel opens when a new message arrives from this chat. Use OPEN ↗ meanwhile.",
-            Modifier.padding(16.dp), fontSize = 14.sp, color = CyanDim)
-        return
-    }
-    fun fail() = Toast.makeText(ctx, "Couldn't send - open ${c.channel.label} to reply", Toast.LENGTH_LONG).show()
-
-    Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        NeonField(text, { text = it }, "Transmit via ${c.channel.label}", Modifier.weight(1f), singleLine = false)
-        Spacer(Modifier.width(8.dp))
-        NeonButton("Send", text.isNotBlank()) {
-            val body = text.trim()
-            text = ""
-            when {
-                tgChat != null -> scope.launch { Telegram.sendText(tgChat, body)?.let { fail() } }
-                isSms -> runCatching { SmsSync.send(ctx, c.address!!, body) }.onFailure { fail() }
-                Replies.send(ctx, c.key, body) -> {
-                    val now = System.currentTimeMillis()
-                    store.add(c.channel, c.pkg, c.key, c.title, null, body, now, true, "${c.key}|me|$now", fuzzy = true)
-                }
-                else -> { text = body; fail() }
-            }
-        }
-    }
-}
-
-private fun openApp(ctx: Context, pkg: String) {
-    val intent = ctx.packageManager.getLaunchIntentForPackage(pkg)
-    if (intent != null) ctx.startActivity(intent)
-    else Toast.makeText(ctx, "App not installed", Toast.LENGTH_SHORT).show()
-}
-
-private fun shortTime(ts: Long): String =
+internal fun shortTime(ts: Long): String =
     if (DateUtils.isToday(ts)) DateFormat.getTimeInstance(DateFormat.SHORT).format(ts)
     else SimpleDateFormat("d MMM", Locale.getDefault()).format(ts)
 
 // ---------- small header button ----------
 
 @Composable
-private fun HudButton(label: String, onClick: () -> Unit) =
+internal fun HudButton(label: String, onClick: () -> Unit) =
     Surface(onClick = onClick, shape = Tag, color = Panel, border = BorderStroke(1.dp, Line)) {
         Hud(label, size = 9.sp, color = Cyan, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
     }
@@ -628,7 +372,7 @@ private fun SettingsScreen(onTelegram: () -> Unit, onBack: () -> Unit) {
 // ---------- search ----------
 
 @Composable
-private fun SearchScreen(store: Store, onOpen: (String) -> Unit, onBack: () -> Unit) {
+private fun SearchScreen(store: Store, onOpen: (String, Long) -> Unit, onBack: () -> Unit) {
     var query by rememberSaveable { mutableStateOf("") }
     val hits by produceState(emptyList<SearchHit>(), query) {
         kotlinx.coroutines.delay(150) // debounce typing
@@ -642,8 +386,8 @@ private fun SearchScreen(store: Store, onOpen: (String) -> Unit, onBack: () -> U
         Hud(if (query.isBlank()) "// Scan all channels" else "${hits.size} hits", size = 9.sp, color = CyanDim, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
         Rule()
         LazyColumn(Modifier.fillMaxSize()) {
-            items(hits, key = { "${it.convKey}|${it.ts}|${it.text.hashCode()}" }) { h ->
-                Column(Modifier.fillMaxWidth().clickable { onOpen(h.convKey) }.padding(horizontal = 16.dp, vertical = 10.dp)) {
+            items(hits, key = { it.id }) { h ->
+                Column(Modifier.fillMaxWidth().clickable { onOpen(h.convKey, h.id) }.padding(horizontal = 16.dp, vertical = 10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Hud(h.channel.label, size = 8.sp, color = Color(h.channel.color))
                         Spacer(Modifier.width(8.dp))
@@ -662,89 +406,12 @@ private fun SearchScreen(store: Store, onOpen: (String) -> Unit, onBack: () -> U
 // ---------- people ----------
 
 @Composable
-private fun AppTags(chats: List<Conversation>) = Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+internal fun AppTags(chats: List<Conversation>) = Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
     chats.map { it.channel }.distinct().forEach { Hud(it.label, size = 8.sp, color = Color(it.color)) }
 }
 
 @Composable
-private fun PersonRow(p: Person, selected: Boolean, onLongClick: () -> Unit, onClick: () -> Unit) {
-    val c = p.latest
-    Row(
-        Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .background(if (selected) Cyan.copy(alpha = 0.12f) else Color.Transparent).padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Avatar(p.name, c.channel)
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (p.unread) Box(Modifier.padding(end = 6.dp).size(7.dp).background(Cyan, Tag))
-                Text(p.name, Modifier.weight(1f), fontWeight = if (p.unread) FontWeight.Bold else FontWeight.Normal,
-                    color = if (p.unread) Cyan else Cyan.copy(alpha = 0.85f), fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (p.needsReply) {
-                    Hud("↩ reply", size = 7.sp, color = Alert, modifier = Modifier.border(1.dp, Alert.copy(alpha = 0.6f), Tag).padding(horizontal = 5.dp, vertical = 2.dp))
-                    Spacer(Modifier.width(6.dp))
-                }
-                Hud(shortTime(c.lastTs), size = 9.sp, color = CyanDim)
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AppTags(p.chats)
-                Spacer(Modifier.width(8.dp))
-                val preview = if (c.lastSender != null && c.lastSender != c.title) "${c.lastSender}: ${c.lastText}" else c.lastText
-                Text(preview, fontSize = 15.sp, color = CyanDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-    }
-}
-
-/** One human's messages from every app, interleaved; replies go out on the chosen app. */
-@Composable
-private fun PersonScreen(store: Store, personKey: String, onOpenChat: (String) -> Unit, onBack: () -> Unit) {
-    val ctx = LocalContext.current
-    val version by store.changes.collectAsState()
-    val person by produceState<Person?>(null, version) { value = withContext(Dispatchers.IO) { store.person(personKey) } }
-    val p = person ?: return
-    val messages by produceState(emptyList<Msg>(), version, p.chats.size) {
-        value = withContext(Dispatchers.IO) { store.messages(p.chats.map { it.key }) }
-    }
-    // reply where they last wrote from
-    var replyKey by rememberSaveable(personKey) { mutableStateOf<String?>(null) }
-    val target = p.chats.firstOrNull { it.key == replyKey } ?: p.chats.first()
-    LaunchedEffect(personKey, p.latest.lastTs) { withContext(Dispatchers.IO) { p.chats.forEach { store.markSeen(it.key) } } }
-    val selection = rememberSelection(store, messages, onBack)
-
-    Column(Modifier.fillMaxSize().imePadding()) {
-        if (selection.active) SelectionBar(selection)
-        else Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) { Text("<", fontFamily = Head, fontSize = 20.sp, color = Cyan) }
-            Avatar(p.name, p.latest.channel)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(p.name, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                AppTags(p.chats)
-            }
-        }
-        Rule()
-        LazyColumn(Modifier.weight(1f).fillMaxWidth(), reverseLayout = true, contentPadding = PaddingValues(12.dp)) {
-            items(messages.asReversed(), key = { it.id }) { m ->
-                val chat = p.chats.firstOrNull { it.key == m.convKey } ?: p.latest
-                Bubble(m, chat, showApp = true, selection = selection)
-            }
-        }
-        Rule()
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Hud("Via", size = 8.sp, color = CyanDim)
-            p.chats.forEach { chat ->
-                Chip(chat.channel.label, Color(chat.channel.color), chat.key == target.key) { replyKey = chat.key }
-            }
-            Hud("Chat ↗", size = 8.sp, modifier = Modifier.clickable { onOpenChat(target.key) }.padding(6.dp))
-        }
-        ReplyBar(ctx, store, target)
-    }
-}
-
-@Composable
-private fun LinkDialog(store: Store, c: Conversation, onDismiss: () -> Unit) {
+internal fun LinkDialog(store: Store, c: Conversation, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     var q by remember { mutableStateOf("") }
     val all by produceState(emptyList<Conversation>()) { value = withContext(Dispatchers.IO) { store.conversations(null) } }
