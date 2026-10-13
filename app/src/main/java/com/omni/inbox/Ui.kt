@@ -15,6 +15,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -157,9 +158,25 @@ private fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () -
     }
     val waiting = all.count { it.needsReply }
     val conversations = if (replyOnly) all.filter { it.needsReply } else all
+    val people = remember(conversations) { conversations.groupBy { it.personKey }.map { (k, chats) -> Person(k, chats.first().title, chats) } }
+
+    // long-press selection: person keys in people mode, chat keys otherwise
+    val scope = rememberCoroutineScope()
+    val picked = remember { mutableStateSetOf<String>() }
+    LaunchedEffect(peopleMode, people) {
+        val live = if (peopleMode) people.mapTo(HashSet()) { it.key } else conversations.mapTo(HashSet()) { it.key }
+        picked.retainAll(live)
+    }
+    BackHandler(picked.isNotEmpty()) { picked.clear() }
+    val selection = Selection(picked, "chat") {
+        val keys = if (peopleMode) people.filter { it.key in picked }.flatMap { p -> p.chats.map { it.key } } else picked.toList()
+        picked.clear()
+        scope.launch(Dispatchers.IO) { store.deleteConversations(keys) }
+    }
 
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 18.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (selection.active) SelectionBar(selection)
+        else Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 18.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Hud("Omni//Inbox", size = 22.sp, bold = true)
                 Hud("${all.size} channels · $waiting awaiting reply", size = 9.sp, color = CyanDim)
@@ -177,7 +194,7 @@ private fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () -
         ) {
             Chip("All", Cyan, filter == null && !replyOnly) { filter = null; replyOnly = false }
             Chip("Reply · $waiting", Alert, replyOnly) { replyOnly = !replyOnly }
-            Chip(if (peopleMode) "People" else "Chats", CyanDim, peopleMode) { peopleMode = !peopleMode }
+            Chip(if (peopleMode) "People" else "Chats", CyanDim, peopleMode) { peopleMode = !peopleMode; picked.clear() }
             Channel.entries.forEach { ch -> Chip(ch.label, Color(ch.color), filter == ch) { filter = if (filter == ch) null else ch } }
         }
         Rule()
@@ -188,13 +205,17 @@ private fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () -
         } else {
             LazyColumn(Modifier.fillMaxSize()) {
                 if (peopleMode) {
-                    val people = conversations.groupBy { it.personKey }.map { (k, chats) -> Person(k, chats.first().title, chats) }
                     items(people, key = { it.key }) { p ->
-                        PersonRow(p) { if (p.chats.size == 1) onOpen(p.latest.key) else onOpen("person:${p.key}") }
+                        PersonRow(p, p.key in picked, onLongClick = { selection.toggle(p.key) }) {
+                            if (selection.active) selection.toggle(p.key)
+                            else if (p.chats.size == 1) onOpen(p.latest.key) else onOpen("person:${p.key}")
+                        }
                         Rule()
                     }
                 } else items(conversations, key = { it.key }) { c ->
-                    ConversationRow(c) { onOpen(c.key) }
+                    ConversationRow(c, c.key in picked, onLongClick = { selection.toggle(c.key) }) {
+                        if (selection.active) selection.toggle(c.key) else onOpen(c.key)
+                    }
                     Rule()
                 }
             }
@@ -227,9 +248,10 @@ private fun Chip(label: String, color: Color, selected: Boolean, onClick: () -> 
 }
 
 @Composable
-private fun ConversationRow(c: Conversation, onClick: () -> Unit) {
+private fun ConversationRow(c: Conversation, selected: Boolean, onLongClick: () -> Unit, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
+        Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .background(if (selected) Cyan.copy(alpha = 0.12f) else Color.Transparent).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Avatar(c.title, c.channel)
@@ -387,9 +409,11 @@ private fun ConversationScreen(store: Store, key: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     var linking by remember { mutableStateOf(false) }
     if (linking) LinkDialog(store, c, onDismiss = { linking = false })
+    val selection = rememberSelection(store, messages, onBack)
 
     Column(Modifier.fillMaxSize().imePadding()) {
-        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (selection.active) SelectionBar(selection)
+        else Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text("<", fontFamily = Head, fontSize = 20.sp, color = Cyan) }
             Avatar(c.title, c.channel)
             Spacer(Modifier.width(12.dp))
@@ -403,7 +427,7 @@ private fun ConversationScreen(store: Store, key: String, onBack: () -> Unit) {
         }
         Rule()
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), reverseLayout = true, contentPadding = PaddingValues(12.dp)) {
-            items(messages.asReversed(), key = { it.id }) { m -> Bubble(m, c) }
+            items(messages.asReversed(), key = { it.id }) { m -> Bubble(m, c, selection = selection) }
         }
         Rule()
         ReplyBar(ctx, store, c)
@@ -411,12 +435,23 @@ private fun ConversationScreen(store: Store, key: String, onBack: () -> Unit) {
 }
 
 @Composable
-private fun Bubble(m: Msg, c: Conversation, showApp: Boolean = false) {
+private fun Bubble(m: Msg, c: Conversation, showApp: Boolean = false, selection: Selection<Long>) {
     val mine = m.outgoing
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
+    val picked = m.id in selection.ids
+    Column(
+        Modifier.fillMaxWidth()
+            .combinedClickable(
+                interactionSource = null, indication = null,
+                onClick = { if (selection.active) selection.toggle(m.id) },
+                onLongClick = { selection.toggle(m.id) },
+            )
+            .background(if (picked) Cyan.copy(alpha = 0.12f) else Color.Transparent)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
+    ) {
         Column(
             Modifier.widthIn(max = 300.dp)
-                .border(1.dp, if (mine) Cyan.copy(alpha = 0.8f) else Line, Angled)
+                .border(1.dp, if (picked) Alert else if (mine) Cyan.copy(alpha = 0.8f) else Line, Angled)
                 .background(if (mine) Cyan.copy(alpha = 0.09f) else Panel, Angled)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
@@ -425,6 +460,51 @@ private fun Bubble(m: Msg, c: Conversation, showApp: Boolean = false) {
             Text(m.text, color = Cyan)
             Hud(shortTime(m.ts), size = 7.sp, color = CyanDim, modifier = Modifier.align(Alignment.End))
         }
+    }
+}
+
+/** Long-press-to-select state for a list; [delete] removes the picked items. */
+private class Selection<T>(val ids: MutableSet<T>, val noun: String, val delete: () -> Unit) {
+    val active get() = ids.isNotEmpty()
+    fun toggle(id: T) { if (!ids.remove(id)) ids.add(id) }
+}
+
+/** [onEmpty] runs when a delete leaves no messages, since the chat itself is then gone. */
+@Composable
+private fun rememberSelection(store: Store, messages: List<Msg>, onEmpty: () -> Unit): Selection<Long> {
+    val scope = rememberCoroutineScope()
+    val ids = remember { mutableStateSetOf<Long>() }
+    // drop ids that vanished (deleted elsewhere, or after our own delete)
+    LaunchedEffect(messages) { val live = messages.mapTo(HashSet()) { it.id }; ids.retainAll(live) }
+    BackHandler(ids.isNotEmpty()) { ids.clear() }
+    return remember(messages) {
+        Selection(ids, "message") {
+            val doomed = ids.toList()
+            val emptied = messages.all { it.id in ids }
+            ids.clear()
+            scope.launch {
+                withContext(Dispatchers.IO) { store.delete(doomed) }
+                if (emptied) onEmpty()
+            }
+        }
+    }
+}
+
+@Composable
+private fun SelectionBar(selection: Selection<*>) {
+    var confirm by remember { mutableStateOf(false) }
+    val n = selection.ids.size
+    if (confirm) AlertDialog(
+        onDismissRequest = { confirm = false }, containerColor = Panel, shape = Angled,
+        title = { Hud("Delete $n ${selection.noun}${if (n == 1) "" else "s"}?", size = 12.sp, bold = true) },
+        text = { Text("Removed from Omni Inbox only. They stay in the original app.", color = CyanDim, fontSize = 14.sp) },
+        confirmButton = { TextButton(onClick = { confirm = false; selection.delete() }) { Hud("Delete", size = 9.sp, color = Alert) } },
+        dismissButton = { TextButton(onClick = { confirm = false }) { Hud("Cancel", size = 9.sp) } },
+    )
+    Row(Modifier.fillMaxWidth().padding(8.dp).heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = { selection.ids.clear() }) { Text("✕", fontFamily = Head, fontSize = 18.sp, color = Cyan) }
+        Hud("$n selected", size = 14.sp, bold = true, modifier = Modifier.weight(1f))
+        TextButton(onClick = { confirm = true }) { Hud("Delete", size = 10.sp, color = Alert) }
     }
 }
 
@@ -587,10 +667,11 @@ private fun AppTags(chats: List<Conversation>) = Row(horizontalArrangement = Arr
 }
 
 @Composable
-private fun PersonRow(p: Person, onClick: () -> Unit) {
+private fun PersonRow(p: Person, selected: Boolean, onLongClick: () -> Unit, onClick: () -> Unit) {
     val c = p.latest
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
+        Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .background(if (selected) Cyan.copy(alpha = 0.12f) else Color.Transparent).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Avatar(p.name, c.channel)
@@ -630,9 +711,11 @@ private fun PersonScreen(store: Store, personKey: String, onOpenChat: (String) -
     var replyKey by rememberSaveable(personKey) { mutableStateOf<String?>(null) }
     val target = p.chats.firstOrNull { it.key == replyKey } ?: p.chats.first()
     LaunchedEffect(personKey, p.latest.lastTs) { withContext(Dispatchers.IO) { p.chats.forEach { store.markSeen(it.key) } } }
+    val selection = rememberSelection(store, messages, onBack)
 
     Column(Modifier.fillMaxSize().imePadding()) {
-        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (selection.active) SelectionBar(selection)
+        else Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text("<", fontFamily = Head, fontSize = 20.sp, color = Cyan) }
             Avatar(p.name, p.latest.channel)
             Spacer(Modifier.width(12.dp))
@@ -645,7 +728,7 @@ private fun PersonScreen(store: Store, personKey: String, onOpenChat: (String) -
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), reverseLayout = true, contentPadding = PaddingValues(12.dp)) {
             items(messages.asReversed(), key = { it.id }) { m ->
                 val chat = p.chats.firstOrNull { it.key == m.convKey } ?: p.latest
-                Bubble(m, chat, showApp = true)
+                Bubble(m, chat, showApp = true, selection = selection)
             }
         }
         Rule()

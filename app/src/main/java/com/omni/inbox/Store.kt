@@ -54,7 +54,7 @@ data class SearchHit(val convKey: String, val channel: Channel, val title: Strin
  * [changes] bumps on every write so the UI can re-query.
  */
 class Store private constructor(private val ctx: Context, passphrase: ByteArray) :
-    SQLiteOpenHelper(ctx, DB_NAME, passphrase, null, 1, 0, null, null, true) {
+    SQLiteOpenHelper(ctx, DB_NAME, passphrase, null, 2, 0, null, null, true) {
 
     val changes = MutableStateFlow(0L)
 
@@ -75,9 +75,15 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
         db.execSQL("CREATE VIRTUAL TABLE messages_fts USING fts4(content=\"messages\", body, conv_title, sender)")
         db.execSQL("CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN INSERT INTO messages_fts(docid, body, conv_title, sender) VALUES (new.id, new.body, new.conv_title, new.sender); END")
         db.execSQL("CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN INSERT INTO messages_fts(messages_fts, docid, body, conv_title, sender) VALUES ('delete', old.id, old.body, old.conv_title, old.sender); END")
+        createDeleted(db)
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {}
+    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
+        if (old < 2) createDeleted(db)
+    }
+
+    // uniq keys of messages the user deleted, so re-syncs (SMS provider, Telegram history) don't bring them back
+    private fun createDeleted(db: SQLiteDatabase) = db.execSQL("CREATE TABLE deleted(uniq TEXT PRIMARY KEY)")
 
     /**
      * Inserts a message unless [uniq] was seen before. With [fuzzy], also skips it when the same
@@ -90,6 +96,7 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
         address: String? = null, notify: Boolean = true,
     ): Boolean {
         val db = writableDatabase
+        db.rawQuery("SELECT 1 FROM deleted WHERE uniq=?", arrayOf(uniq)).use { if (it.moveToFirst()) return false }
         if (fuzzy) {
             db.rawQuery(
                 "SELECT 1 FROM messages WHERE channel=? AND body=? AND ts BETWEEN ? AND ? AND outgoing=? LIMIT 1",
@@ -193,6 +200,32 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
     fun unlink(key: String) {
         touchState(key)
         writableDatabase.execSQL("UPDATE conv_state SET person_id=-1 WHERE conv_key=?", arrayOf<Any>(key))
+        changed()
+    }
+
+    /** Deletes messages by id and remembers them so they aren't imported again. */
+    fun delete(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        purge("id IN (${ids.joinToString(",")})", emptyArray())
+    }
+
+    /** Deletes whole chats; a new message later starts the chat afresh. */
+    fun deleteConversations(keys: Collection<String>) {
+        if (keys.isEmpty()) return
+        val marks = keys.joinToString(",") { "?" }
+        val args = keys.toTypedArray<Any>()
+        purge("conv_key IN ($marks)", args) {
+            writableDatabase.execSQL("DELETE FROM conv_state WHERE conv_key IN ($marks)", args)
+        }
+    }
+
+    private fun purge(where: String, args: Array<Any>, also: () -> Unit = {}) {
+        val db = writableDatabase
+        inTransaction {
+            db.execSQL("INSERT OR IGNORE INTO deleted(uniq) SELECT uniq FROM messages WHERE $where", args)
+            db.execSQL("DELETE FROM messages WHERE $where", args)
+            also()
+        }
         changed()
     }
 
