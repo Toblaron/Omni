@@ -126,7 +126,7 @@ fun App() {
     var back by rememberSaveable { mutableStateOf("inbox") }
     // message to scroll to and highlight when a chat opens from search
     var focus by rememberSaveable { mutableLongStateOf(0L) }
-    fun go(to: String, focusId: Long = 0L) { back = if (route == "search" || route == "settings") route else "inbox"; route = to; focus = focusId }
+    fun go(to: String, focusId: Long = 0L) { back = if (route in setOf("search", "settings", "stats")) route else "inbox"; route = to; focus = focusId }
     fun up() { route = back; back = "inbox"; focus = 0L }
     val locked by AppLock.locked.collectAsState()
     val openRequest by MainActivity.openRequest.collectAsState()
@@ -140,7 +140,8 @@ fun App() {
             else when (route) {
                 "inbox" -> InboxScreen(store, onOpen = { go(it) }, onTelegram = { go("telegram") }, onSearch = { go("search") }, onSettings = { go("settings") })
                 "telegram" -> TelegramScreen(::up)
-                "settings" -> SettingsScreen(onTelegram = { go("telegram") }, onBack = ::up)
+                "settings" -> SettingsScreen(onTelegram = { go("telegram") }, onStats = { go("stats") }, onBack = ::up)
+                "stats" -> StatsScreen(store, onOpen = { go(it) }, onBack = ::up)
                 "search" -> SearchScreen(store, onOpen = ::go, onBack = ::up)
                 in Regex("person:.*") -> PersonScreen(store, route.removePrefix("person:"), onOpenChat = { go(it) }, onBack = ::up)
                 else -> ConversationScreen(store, route, focus, ::up)
@@ -325,7 +326,7 @@ private fun LockScreen() {
 // ---------- settings ----------
 
 @Composable
-private fun SettingsScreen(onTelegram: () -> Unit, onBack: () -> Unit) {
+private fun SettingsScreen(onTelegram: () -> Unit, onStats: () -> Unit, onBack: () -> Unit) {
     val ctx = LocalContext.current
     var lockOn by remember { mutableStateOf(AppLock.isEnabled(ctx)) }
     val lockAvailable = remember { AppLock.available(ctx) }
@@ -358,6 +359,8 @@ private fun SettingsScreen(onTelegram: () -> Unit, onBack: () -> Unit) {
         }
         Rule()
         NeonButton("Telegram uplink", onClick = onTelegram)
+        Rule()
+        NeonButton("Stats", onClick = onStats)
         Rule()
         val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { ImportState.load(ctx, it) } }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -415,8 +418,9 @@ internal fun LinkDialog(store: Store, c: Conversation, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     var q by remember { mutableStateOf("") }
     val all by produceState(emptyList<Conversation>()) { value = withContext(Dispatchers.IO) { store.conversations(null) } }
-    val merged = all.filter { it.personKey == c.personKey && it.key != c.key }
-    val candidates = all.filter { it.key != c.key && !it.isGroup && it.personKey != c.personKey && it.title.contains(q, true) }.take(40)
+    val mine = People.group(all).firstOrNull { p -> p.chats.any { it.key == c.key } }?.chats.orEmpty().map { it.key }.toSet()
+    val merged = all.filter { it.key in mine && it.key != c.key }
+    val candidates = all.filter { it.key !in mine && !it.isGroup && it.title.contains(q, true) }.take(40)
     AlertDialog(
         onDismissRequest = onDismiss, containerColor = Panel, shape = Angled,
         title = { Hud("Link ${c.title}", size = 12.sp, bold = true) },

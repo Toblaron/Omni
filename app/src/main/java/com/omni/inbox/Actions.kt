@@ -81,6 +81,21 @@ object Actions {
         ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), null))
     }
 
+    /** Opens the calendar's "new event" screen, prefilled; no calendar permission needed. */
+    fun addToCalendar(ctx: Context, w: Signals.When, title: String) {
+        val intent = Intent(Intent.ACTION_INSERT, android.provider.CalendarContract.Events.CONTENT_URI)
+            .putExtra(android.provider.CalendarContract.EXTRA_EVENT_BEGIN_TIME, w.start)
+            .putExtra(android.provider.CalendarContract.EXTRA_EVENT_END_TIME, w.start + 3_600_000)
+            .putExtra(android.provider.CalendarContract.EXTRA_EVENT_ALL_DAY, !w.hasTime)
+            .putExtra(android.provider.CalendarContract.Events.TITLE, title.take(120))
+        runCatching { ctx.startActivity(intent) }.onFailure { Toast.makeText(ctx, "No calendar app", Toast.LENGTH_SHORT).show() }
+    }
+
+    fun openMap(ctx: Context, place: String) {
+        runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=" + Uri.encode(place)))) }
+            .onFailure { Toast.makeText(ctx, "No maps app", Toast.LENGTH_SHORT).show() }
+    }
+
     private fun tgChat(c: Conversation) = c.key.removePrefix("tg:").toLongOrNull()?.takeIf { c.key.startsWith("tg:") }
     private fun isSms(c: Conversation) = c.channel == Channel.SMS && c.address != null && c.key.startsWith("sms:")
 }

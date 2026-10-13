@@ -45,6 +45,7 @@ object Telegram {
     private val nextExtra = AtomicLong(1)
     private val pending = ConcurrentHashMap<Long, CompletableDeferred<JSONObject>>()
     private val users = ConcurrentHashMap<Long, String>()
+    private val phones = ConcurrentHashMap<Long, String>() // user id → number, only for your contacts
     private val chats = ConcurrentHashMap<Long, String>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -109,7 +110,7 @@ object Telegram {
         }
         when (o.optString("@type")) {
             "updateAuthorizationState" -> onAuthState(o.getJSONObject("authorization_state"))
-            "updateUser" -> o.getJSONObject("user").let { users[it.getLong("id")] = userName(it) }
+            "updateUser" -> o.getJSONObject("user").let { remember(it) }
             "updateNewChat" -> o.getJSONObject("chat").let { chats[it.getLong("id")] = it.optString("title") }
             "updateChatTitle" -> chats[o.getLong("chat_id")] = o.optString("title")
             "updateNewMessage" -> o.getJSONObject("message").let { m ->
@@ -203,7 +204,9 @@ object Telegram {
             val title = chatTitle(chatId)
             added = store.add(
                 Channel.TELEGRAM, PKG, "tg:$chatId", title, if (outgoing) null else senderName(m.optJSONObject("sender_id")),
-                text, m.getLong("date") * 1000, outgoing, "tg:$chatId:${m.getLong("id")}", fuzzy = false, notify = false,
+                text, m.getLong("date") * 1000, outgoing, "tg:$chatId:${m.getLong("id")}", fuzzy = false,
+                // private chats share the user's id; the number lets People merge them with SMS/WhatsApp
+                address = if (chatId > 0) phoneOf(chatId) else null, notify = false,
             ) || added
         }
         if (added && notify) store.changed()
@@ -212,10 +215,22 @@ object Telegram {
     private suspend fun chatTitle(id: Long): String =
         chats[id] ?: query(obj("getChat", "chat_id" to id)).optString("title").ifBlank { "Telegram" }.also { chats[id] = it }
 
+    private fun remember(u: JSONObject): String {
+        val id = u.getLong("id")
+        u.optString("phone_number").takeIf { it.isNotBlank() }?.let { phones[id] = it }
+        return userName(u).also { users[id] = it }
+    }
+
+    private suspend fun phoneOf(userId: Long): String? {
+        if (!users.containsKey(userId)) fetchUser(userId)
+        return phones[userId]
+    }
+
+    private suspend fun fetchUser(id: Long): String? =
+        query(obj("getUser", "user_id" to id)).takeIf { it.optString("@type") == "user" }?.let(::remember)
+
     private suspend fun senderName(s: JSONObject?): String? = when (s?.optString("@type")) {
-        "messageSenderUser" -> s.getLong("user_id").let { id ->
-            users[id] ?: userName(query(obj("getUser", "user_id" to id))).also { users[id] = it }
-        }
+        "messageSenderUser" -> s.getLong("user_id").let { id -> users[id] ?: fetchUser(id) }
         "messageSenderChat" -> chatTitle(s.getLong("chat_id"))
         else -> null
     }

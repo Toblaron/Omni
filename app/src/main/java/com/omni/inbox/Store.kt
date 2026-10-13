@@ -36,19 +36,15 @@ data class Conversation(
     /** Hidden from the inbox until then (0 = not snoozed). */
     val snoozeUntil: Long = 0,
     val draft: String? = null,
+    /** A number for matching this chat to the same person elsewhere (SMS, WhatsApp, Telegram, address book). */
+    val phone: String? = null,
+    /** You asked something 2–14 days ago and haven't heard back. */
+    val followUp: Boolean = false,
 ) {
     val snoozed get() = snoozeUntil > System.currentTimeMillis()
     val hidden get() = archived || snoozed
     /** Inbox order: a chat whose snooze ran out comes back at the top as if it just arrived. */
     val sortTs get() = if (snoozeUntil in 1..System.currentTimeMillis()) maxOf(lastTs, snoozeUntil) else lastTs
-
-    /** Chats sharing this key are the same human across apps. */
-    val personKey: String
-        get() = when {
-            personId != null && personId > 0 -> "p:$personId"
-            personId == -1L || isGroup -> "c:$key"
-            else -> "n:" + title.lowercase().filter { it.isLetterOrDigit() || it == ' ' }.trim().replace(Regex("\\s+"), " ")
-        }
 }
 
 /** One human, possibly on several apps. */
@@ -61,6 +57,7 @@ data class Person(val key: String, val name: String, val chats: List<Conversatio
     val hidden get() = chats.all { it.hidden }
     val sortTs get() = chats.maxOf { it.sortTs }
     val draft get() = chats.firstNotNullOfOrNull { it.draft?.takeIf(String::isNotBlank) }
+    val followUp get() = chats.any { it.followUp && !it.muted }
 }
 
 data class Reminder(val id: Long, val convKey: String, val at: Long, val text: String)
@@ -105,6 +102,14 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
                 "snooze_until INTEGER NOT NULL DEFAULT 0", "draft TEXT").forEach { db.execSQL("ALTER TABLE conv_state ADD COLUMN $it") }
             db.execSQL("CREATE TABLE reminders(id INTEGER PRIMARY KEY AUTOINCREMENT, conv_key TEXT NOT NULL, at INTEGER NOT NULL, text TEXT NOT NULL)")
         }
+        if (old < 4) {
+            // asks: the message expects an answer (see Signals.asks); drives "needs reply" and follow-ups
+            db.execSQL("ALTER TABLE messages ADD COLUMN asks INTEGER NOT NULL DEFAULT 1")
+            val quiet = db.rawQuery("SELECT id, body FROM messages", null).use { c ->
+                buildList { while (c.moveToNext()) if (!Signals.asks(c.getString(1))) add(c.getLong(0)) }
+            }
+            quiet.chunked(500).forEach { ids -> db.execSQL("UPDATE messages SET asks=0 WHERE id IN (${ids.joinToString(",")})") }
+        }
     }
 
     /**
@@ -129,6 +134,7 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
             put("channel", channel.name); put("pkg", pkg); put("conv_key", convKey)
             put("conv_title", convTitle); put("address", address); put("sender", sender)
             put("body", text); put("ts", ts); put("outgoing", if (outgoing) 1 else 0); put("uniq", uniq)
+            put("asks", if (Signals.asks(text)) 1 else 0)
         }, SQLiteDatabase.CONFLICT_IGNORE)
         if (row != -1L && notify) changed()
         return row != -1L
@@ -147,7 +153,8 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
                MAX(CASE WHEN m.outgoing=0 THEN m.ts END), MAX(CASE WHEN m.outgoing=1 THEN m.ts END),
                IFNULL(s.seen_ts, 0), IFNULL(s.done_ts, 0),
                COUNT(DISTINCT CASE WHEN m.outgoing=0 THEN m.sender END), s.person_id,
-               IFNULL(s.pinned, 0), IFNULL(s.archived_ts, 0), IFNULL(s.muted, 0), IFNULL(s.snooze_until, 0), s.draft
+               IFNULL(s.pinned, 0), IFNULL(s.archived_ts, 0), IFNULL(s.muted, 0), IFNULL(s.snooze_until, 0), s.draft,
+               MAX(CASE WHEN m.outgoing=0 AND m.asks=1 THEN m.ts END), MAX(CASE WHEN m.outgoing=1 AND m.asks=1 THEN m.ts END)
         FROM messages m LEFT JOIN conv_state s ON s.conv_key = m.conv_key"""
 
     // SQLite returns the bare columns from the row that holds MAX(ts)
@@ -155,12 +162,22 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
         val lastTs = c.getLong(6)
         val lastIn = if (c.isNull(8)) 0L else c.getLong(8)
         val lastOut = if (c.isNull(9)) 0L else c.getLong(9)
+        val done = c.getLong(11)
+        val askIn = if (c.isNull(19)) 0L else c.getLong(19)
+        val askOut = if (c.isNull(20)) 0L else c.getLong(20)
+        val waited = System.currentTimeMillis() - askOut
+        val key = c.getString(0)
+        val channel = Channel.valueOf(c.getString(1))
+        val isGroup = c.getInt(12) > 1
         return Conversation(
-            c.getString(0), Channel.valueOf(c.getString(1)), c.getString(2), c.getString(3),
+            key, channel, c.getString(2), c.getString(3),
             c.getString(4), c.getString(5), lastTs, c.getString(7),
             unread = lastIn > c.getLong(10),
-            needsReply = lastIn > lastOut && lastIn > c.getLong(11),
-            isGroup = c.getInt(12) > 1,
+            // only messages that ask something (questions, plans, longer notes) need an answer; "ok 👍" doesn't
+            needsReply = askIn > lastOut && askIn > done,
+            followUp = askOut > lastIn && askOut > done && waited in FOLLOW_UP_MIN..FOLLOW_UP_MAX,
+            phone = if (isGroup) null else phoneOf(key, channel, c.getString(7), c.getString(3)),
+            isGroup = isGroup,
             personId = if (c.isNull(13)) null else c.getLong(13),
             pinned = c.getInt(14) == 1,
             archived = c.getLong(15) >= lastTs,
@@ -169,6 +186,11 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
             draft = c.getString(18),
         )
     }
+
+    private fun phoneOf(key: String, channel: Channel, address: String?, title: String): String? = when {
+        channel == Channel.SMS || key.startsWith("tg:") -> address
+        else -> WA_JID.find(key)?.groupValues?.get(1)
+    } ?: People.contactPhone(ctx, title)
 
     fun conversations(filter: Channel?): List<Conversation> {
         val where = if (filter != null) "WHERE m.channel=?" else ""
@@ -194,9 +216,13 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
             }
         }
 
+    /** Who-wrote-when since [since], for reply statistics. */
+    fun timeline(since: Long): List<Stats.Row> =
+        readableDatabase.rawQuery("SELECT conv_key, channel, ts, outgoing FROM messages WHERE ts > ? ORDER BY conv_key, ts", arrayOf(since.toString()))
+            .use { c -> buildList { while (c.moveToNext()) add(Stats.Row(c.getString(0), Channel.valueOf(c.getString(1)), c.getLong(2), c.getInt(3) == 1)) } }
+
     /** Conversations grouped into people, most recent first. */
-    fun people(filter: Channel?): List<Person> =
-        conversations(filter).groupBy { it.personKey }.map { (k, chats) -> Person(k, chats.first().title, chats) }
+    fun people(filter: Channel?): List<Person> = People.group(conversations(filter))
 
     fun person(key: String): Person? = people(null).firstOrNull { it.key == key }
 
@@ -356,7 +382,10 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
 
     companion object {
         private const val DB_NAME = "omni-vault.db"
-        private const val VERSION = 3
+        private const val VERSION = 4
+        private const val FOLLOW_UP_MIN = 2 * 86_400_000L
+        private const val FOLLOW_UP_MAX = 14 * 86_400_000L
+        private val WA_JID = Regex("""(\d{6,15})@s\.whatsapp\.net""")
         private const val LEGACY_DB = "omni.db"
 
         @Volatile private var instance: Store? = null

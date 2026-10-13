@@ -216,7 +216,55 @@ private fun Bubble(m: Msg, c: Conversation, showApp: Boolean, selection: Selecti
             Text(m.text, color = Cyan)
             Hud(shortTime(m.ts), size = 7.sp, color = CyanDim, modifier = Modifier.align(Alignment.End))
         }
+        SignalChips(m, c)
     }
+}
+
+/** Upcoming times ("i morgen kl 18") and street addresses found in a message, as tappable chips. */
+@Composable
+private fun SignalChips(m: Msg, c: Conversation) {
+    val ctx = LocalContext.current
+    val whens = remember(m.id) { Signals.whens(m.text, m.ts).filter { it.start > System.currentTimeMillis() - 2 * 3_600_000 } }
+    val places = remember(m.id) { Signals.places(m.text) }
+    if (whens.isEmpty() && places.isEmpty()) return
+    val askNotify = rememberNotifyPermission()
+    val scope = rememberCoroutineScope()
+    Row(Modifier.padding(top = 4.dp).widthIn(max = 300.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        whens.forEach { w ->
+            var open by remember { mutableStateOf(false) }
+            Box {
+                SignalChip("📅 " + whenLabel(w)) { open = true }
+                DropdownMenu(open, onDismissRequest = { open = false }, containerColor = Panel) {
+                    MenuItem("Add to calendar") { open = false; Actions.addToCalendar(ctx, w, "${c.title}: ${m.text}") }
+                    MenuItem("Remind me") {
+                        open = false
+                        askNotify()
+                        // an hour ahead for timed plans; at 9 for all-day ones
+                        val at = (if (w.hasTime) w.start - 3_600_000 else w.start).coerceAtLeast(System.currentTimeMillis() + 60_000)
+                        scope.launch(Dispatchers.IO) { Reminders.add(ctx, c.key, at, m.text) }
+                        Toast.makeText(ctx, "Reminder set · ${whenLabel(Signals.When(at, true, ""))}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+        places.forEach { p -> SignalChip("📍 $p") { Actions.openMap(ctx, p) } }
+    }
+}
+
+@Composable
+private fun SignalChip(label: String, onClick: () -> Unit) =
+    Surface(onClick = onClick, shape = Tag, color = Panel, border = androidx.compose.foundation.BorderStroke(1.dp, Line)) {
+        Text(label, Modifier.padding(horizontal = 8.dp, vertical = 4.dp), color = Cyan, fontSize = 13.sp, maxLines = 1)
+    }
+
+private fun whenLabel(w: Signals.When): String {
+    val day = when (val d = ((dayStart(w.start) - dayStart(System.currentTimeMillis())) / DateUtils.DAY_IN_MILLIS).toInt()) {
+        0 -> "Today"
+        1 -> "Tomorrow"
+        in 2..6 -> SimpleDateFormat("EEE", Locale.getDefault()).format(w.start)
+        else -> SimpleDateFormat("d MMM", Locale.getDefault()).format(w.start)
+    }
+    return if (w.hasTime) "$day ${SimpleDateFormat("HH:mm", Locale.getDefault()).format(w.start)}" else day
 }
 
 // ---------- selection ----------

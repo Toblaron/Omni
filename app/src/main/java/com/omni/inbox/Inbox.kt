@@ -39,21 +39,30 @@ internal fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () 
     val scope = rememberCoroutineScope()
     val version by store.changes.collectAsState()
     var filter by rememberSaveable { mutableStateOf<Channel?>(null) }
-    var replyOnly by rememberSaveable { mutableStateOf(false) }
-    var archiveView by rememberSaveable { mutableStateOf(false) }
+    var view by rememberSaveable { mutableStateOf(View.ALL) }
+    val archiveView = view == View.ARCHIVE
     var peopleMode by rememberSaveable { mutableStateOf(true) }
     // re-checks once a minute so chats whose snooze ran out come back without a new message
     val minute by produceState(0L) { while (true) { value = System.currentTimeMillis() / 60_000; delay(60_000) } }
     val all by produceState(emptyList<Conversation>(), version, minute) { value = withContext(Dispatchers.IO) { store.inbox() } }
+    val vips by produceState(emptySet<String>(), version) { value = withContext(Dispatchers.IO) { Stats.vipKeys(store) } }
 
     val live = all.filter { !it.hidden }
     val waiting = live.count { it.needsReply && !it.muted }
+    val following = live.count { it.followUp && !it.muted }
     val hiddenCount = all.count { it.hidden }
-    val chats = all.filter { (filter == null || it.channel == filter) && it.hidden == archiveView && (!replyOnly || (it.needsReply && !it.muted)) }
+    fun shows(c: Conversation) = when (view) {
+        View.ALL -> !c.hidden
+        View.REPLY -> !c.hidden && c.needsReply && !c.muted
+        View.FOLLOW_UP -> !c.hidden && c.followUp && !c.muted
+        View.VIP -> !c.hidden && c.key in vips
+        View.ARCHIVE -> c.hidden
+    }
+    val chats = all.filter { (filter == null || it.channel == filter) && shows(it) }
     // people group across all apps first, so a person shows up under each app filter they're on
-    val people = remember(all, filter, archiveView, replyOnly) {
-        all.groupBy { it.personKey }.map { (k, cs) -> Person(k, cs.first().title, cs) }
-            .filter { p -> (filter == null || p.chats.any { it.channel == filter }) && p.hidden == archiveView && (!replyOnly || p.needsReply) }
+    val people = remember(all, filter, view, vips) {
+        People.group(all)
+            .filter { p -> (filter == null || p.chats.any { it.channel == filter }) && (if (archiveView) p.hidden else !p.hidden && p.chats.any(::shows)) }
             .sortedWith(compareByDescending<Person> { it.pinned }.thenByDescending { it.sortTs })
     }
 
@@ -110,14 +119,17 @@ internal fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () 
             Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Chip("All", Cyan, filter == null && !replyOnly && !archiveView) { filter = null; replyOnly = false; archiveView = false }
-            Chip("Reply · $waiting", Alert, replyOnly) { replyOnly = !replyOnly; archiveView = false }
+            fun toggle(v: View) { view = if (view == v) View.ALL else v; picked.clear() }
+            Chip("All", Cyan, filter == null && view == View.ALL) { filter = null; view = View.ALL; picked.clear() }
+            Chip("Reply · $waiting", Alert, view == View.REPLY) { toggle(View.REPLY) }
+            if (following > 0 || view == View.FOLLOW_UP) Chip("Follow-up · $following", Alert, view == View.FOLLOW_UP) { toggle(View.FOLLOW_UP) }
+            if (vips.isNotEmpty() || view == View.VIP) Chip("★ VIP", Cyan, view == View.VIP) { toggle(View.VIP) }
             Chip(if (peopleMode) "People" else "Chats", CyanDim, peopleMode) { peopleMode = !peopleMode; picked.clear() }
             Channel.entries.forEach { ch ->
                 val unread = live.count { it.channel == ch && it.unread && !it.muted }
                 Chip(if (unread > 0) "${ch.label} · $unread" else ch.label, Color(ch.color), filter == ch) { filter = if (filter == ch) null else ch }
             }
-            Chip("Archive · $hiddenCount", CyanDim, archiveView) { archiveView = !archiveView; replyOnly = false; picked.clear() }
+            Chip("Archive · $hiddenCount", CyanDim, archiveView) { toggle(View.ARCHIVE) }
         }
         Rule()
         val empty = if (peopleMode) people.isEmpty() else chats.isEmpty()
@@ -142,6 +154,7 @@ internal fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () 
                     SwipeRow(swipe(p.chats), enabled = !selection.active) {
                         InboxRow(
                             title = p.name, c = p.latest, tags = { AppTags(p.chats) }, unread = p.unread, needsReply = p.needsReply,
+                            followUp = p.followUp, vip = p.chats.any { it.key in vips },
                             pinned = p.pinned, muted = p.muted, snoozeUntil = p.chats.maxOf { it.snoozeUntil }, draft = p.draft,
                             selected = p.key in picked, onLongClick = { selection.toggle(p.key) },
                         ) {
@@ -155,6 +168,7 @@ internal fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () 
                         InboxRow(
                             title = c.title, c = c, tags = { Hud(c.channel.label, size = 8.sp, color = Color(c.channel.color)) },
                             unread = c.unread && !c.muted, needsReply = c.needsReply && !c.muted, pinned = c.pinned, muted = c.muted,
+                            followUp = c.followUp && !c.muted, vip = c.key in vips,
                             snoozeUntil = c.snoozeUntil, draft = c.draft?.takeIf(String::isNotBlank),
                             selected = c.key in picked, onLongClick = { selection.toggle(c.key) },
                         ) { if (selection.active) selection.toggle(c.key) else onOpen(c.key) }
@@ -166,10 +180,12 @@ internal fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () 
     }
 }
 
+private enum class View { ALL, REPLY, FOLLOW_UP, VIP, ARCHIVE }
+
 private fun snooze(ctx: android.content.Context, store: Store, chats: List<Conversation>, at: Long) {
     store.snooze(chats.map { it.key }, at)
     // one nudge per person/chat is enough
-    chats.distinctBy { it.personKey }.forEach { Reminders.add(ctx, it.key, at, "Snoozed chat is back · ${it.lastText}") }
+    chats.distinctBy { People.normalizeName(it.title) }.forEach { Reminders.add(ctx, it.key, at, "Snoozed chat is back · ${it.lastText}") }
 }
 
 private fun restore(ctx: android.content.Context, store: Store, chats: List<Conversation>) {
@@ -184,7 +200,7 @@ private fun restore(ctx: android.content.Context, store: Store, chats: List<Conv
 @Composable
 private fun InboxRow(
     title: String, c: Conversation, tags: @Composable () -> Unit, unread: Boolean, needsReply: Boolean,
-    pinned: Boolean, muted: Boolean, snoozeUntil: Long, draft: String?,
+    followUp: Boolean, vip: Boolean, pinned: Boolean, muted: Boolean, snoozeUntil: Long, draft: String?,
     selected: Boolean, onLongClick: () -> Unit, onClick: () -> Unit,
 ) {
     val nameColor = when { muted -> CyanDim; unread -> Cyan; else -> Cyan.copy(alpha = 0.85f) }
@@ -199,11 +215,15 @@ private fun InboxRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (unread) Box(Modifier.padding(end = 6.dp).size(7.dp).background(Cyan, Tag))
                 if (pinned) Hud("◆", size = 9.sp, modifier = Modifier.padding(end = 5.dp))
+                if (vip) Hud("★", size = 10.sp, modifier = Modifier.padding(end = 5.dp))
                 Text(title, Modifier.weight(1f), fontWeight = if (unread) FontWeight.Bold else FontWeight.Normal,
                     color = nameColor, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (muted) { Hud("muted", size = 7.sp, color = CyanDim); Spacer(Modifier.width(6.dp)) }
                 if (needsReply) {
                     Hud("↩ reply", size = 7.sp, color = Alert, modifier = Modifier.border(1.dp, Alert.copy(alpha = 0.6f), Tag).padding(horizontal = 5.dp, vertical = 2.dp))
+                    Spacer(Modifier.width(6.dp))
+                } else if (followUp) {
+                    Hud("⏳ follow up", size = 7.sp, color = Alert, modifier = Modifier.border(1.dp, Alert.copy(alpha = 0.4f), Tag).padding(horizontal = 5.dp, vertical = 2.dp))
                     Spacer(Modifier.width(6.dp))
                 }
                 if (snoozeUntil > System.currentTimeMillis()) Hud("💤 " + snoozeLabel(snoozeUntil), size = 8.sp, color = CyanDim)
