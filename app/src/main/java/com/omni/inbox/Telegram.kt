@@ -48,7 +48,13 @@ object Telegram {
     private val chats = ConcurrentHashMap<Long, String>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val loaded: Boolean by lazy { runCatching { System.loadLibrary("tdjson") }.isSuccess }
+    private val loaded: Boolean by lazy {
+        runCatching {
+            System.loadLibrary("tdjson")
+            // synchronous offline call: proves the native library actually works
+            android.util.Log.i("OmniTelegram", "TDLib self-test: " + JsonClient.td_execute(obj("getTextEntities", "text" to "@telegram").toString()).take(80))
+        }.onFailure { android.util.Log.e("OmniTelegram", "TDLib unavailable", it) }.isSuccess
+    }
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("telegram", Context.MODE_PRIVATE)
     fun isLinked(ctx: Context) = prefs(ctx).getBoolean("linked", false)
