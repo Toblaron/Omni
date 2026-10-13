@@ -40,9 +40,9 @@ import java.util.Locale
 internal fun ConversationScreen(store: Store, key: String, focusId: Long, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val version by store.changes.collectAsState()
-    val conv by produceState<Conversation?>(null, version) { value = withContext(Dispatchers.IO) { store.conversation(key) } }
+    val conv by produceState<Loaded<Conversation?>>(Loaded.Pending, version) { value = Loaded.Done(withContext(Dispatchers.IO) { store.conversation(key) }) }
     val messages by produceState(emptyList<Msg>(), version) { value = withContext(Dispatchers.IO) { store.messages(key) } }
-    val c = conv ?: return
+    val c = conv.orGoBack(onBack) ?: return
     LaunchedEffect(key, c.lastTs) { withContext(Dispatchers.IO) { store.markSeen(key) } }
     val scope = rememberCoroutineScope()
     var linking by remember { mutableStateOf(false) }
@@ -60,7 +60,7 @@ internal fun ConversationScreen(store: Store, key: String, focusId: Long, onBack
                 Hud(c.channel.label, size = 8.sp, color = Color(c.channel.color))
             }
             CatchUpButton(c.title) { messages }
-            if (c.needsReply) TextButton(onClick = { scope.launch(Dispatchers.IO) { store.markDone(key) } }) { Hud(s(R.string.done), size = 9.sp, color = Alert) }
+            if (c.needsReply) TextButton(onClick = { scope.launch(Dispatchers.IO) { failSoftly(ctx) { store.markDone(key) } } }) { Hud(s(R.string.done), size = 9.sp, color = Alert) }
             if (!c.isGroup) TextButton(onClick = { linking = true }) { Hud(s(R.string.link), size = 9.sp) }
             if (c.pkg != null) TextButton(onClick = { Actions.openChat(ctx, c) }) { Hud(s(R.string.open_app), size = 9.sp) }
         }
@@ -77,8 +77,8 @@ internal fun ConversationScreen(store: Store, key: String, focusId: Long, onBack
 @Composable
 internal fun PersonScreen(store: Store, personKey: String, onOpenChat: (String) -> Unit, onBack: () -> Unit) {
     val version by store.changes.collectAsState()
-    val person by produceState<Person?>(null, version) { value = withContext(Dispatchers.IO) { store.person(personKey) } }
-    val p = person ?: return
+    val person by produceState<Loaded<Person?>>(Loaded.Pending, version) { value = Loaded.Done(withContext(Dispatchers.IO) { store.person(personKey) }) }
+    val p = person.orGoBack(onBack) ?: return
     val messages by produceState(emptyList<Msg>(), version, p.chats.size) {
         value = withContext(Dispatchers.IO) { store.messages(p.chats.map { it.key }) }
     }
@@ -113,6 +113,20 @@ internal fun PersonScreen(store: Store, personKey: String, onOpenChat: (String) 
         }
         ReplyBar(store, target)
     }
+}
+
+/** A query result that distinguishes "still loading" from "gone". */
+internal sealed interface Loaded<out T> {
+    data object Pending : Loaded<Nothing>
+    data class Done<T>(val value: T) : Loaded<T>
+}
+
+/** The loaded value; leaves the screen when it turned out not to exist (deleted, merged away, stale link). */
+@Composable
+private fun <T : Any> Loaded<T?>.orGoBack(onBack: () -> Unit): T? {
+    val value = (this as? Loaded.Done)?.value
+    if (this is Loaded.Done && value == null) LaunchedEffect(Unit) { onBack() }
+    return value
 }
 
 // ---------- message list ----------
@@ -271,7 +285,7 @@ private fun SignalChips(m: Msg, c: Conversation) {
                         askNotify()
                         // an hour ahead for timed plans; at 9 for all-day ones
                         val at = (if (w.hasTime) w.start - 3_600_000 else w.start).coerceAtLeast(System.currentTimeMillis() + 60_000)
-                        scope.launch(Dispatchers.IO) { Reminders.add(ctx, c.key, at, m.text) }
+                        scope.launch(Dispatchers.IO) { failSoftly(ctx) { Reminders.add(ctx, c.key, at, m.text) } }
                         Toast.makeText(ctx, s(R.string.reminder_set, whenLabel(Signals.When(at, true, ""))), Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -376,7 +390,6 @@ private fun MessageSelectionBar(store: Store, selection: Selection<Long>, messag
 @Composable
 private fun ForwardDialog(store: Store, text: String, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
     var q by remember { mutableStateOf("") }
     val targets by produceState(emptyList<Conversation>()) {
         value = withContext(Dispatchers.IO) { store.inbox() }.filter { Actions.canSend(ctx, it) }
@@ -394,7 +407,7 @@ private fun ForwardDialog(store: Store, text: String, onDismiss: () -> Unit) {
                         Row(
                             Modifier.fillMaxWidth().clickable {
                                 onDismiss()
-                                scope.launch {
+                                appScope.launch {
                                     val ok = Actions.send(ctx, store, t, text)
                                     Toast.makeText(ctx, s(if (ok) R.string.sent_to else R.string.send_failed_to, t.title), Toast.LENGTH_SHORT).show()
                                 }
@@ -441,11 +454,13 @@ private fun ReplyBar(store: Store, c: Conversation) {
         value = withContext(Dispatchers.IO) { store.pendingReminders().filter { it.convKey == c.key && it.kind == Reminder.KIND_SEND } }
     }
     var scheduling by remember { mutableStateOf(false) }
+    val askNotify = rememberNotifyPermission()
     if (scheduling) ScheduleDialog(onDismiss = { scheduling = false }) { at ->
         scheduling = false
+        askNotify() // a scheduled SMS that can't go out says so in a notification
         val body = text.trim()
         text = ""
-        scope.launch {
+        appScope.launch {
             val ok = Actions.schedule(ctx, c, body, at)
             if (!ok) text = body
             Toast.makeText(ctx, if (ok) s(R.string.scheduled_at, shortTime(at) + " " + java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(at)) else s(R.string.schedule_failed), Toast.LENGTH_SHORT).show()
@@ -457,7 +472,7 @@ private fun ReplyBar(store: Store, c: Conversation) {
             Hud("⏱ " + shortTime(r.at) + " " + java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(r.at), size = 8.sp, color = CyanDim)
             Spacer(Modifier.width(8.dp))
             Text(r.text, Modifier.weight(1f), color = CyanDim, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            TextButton(onClick = { scope.launch(Dispatchers.IO) { Reminders.cancel(ctx, r.id) } }) { Hud("✕", size = 10.sp, color = Alert) }
+            TextButton(onClick = { scope.launch(Dispatchers.IO) { failSoftly(ctx) { Reminders.cancel(ctx, r.id) } } }) { Hud("✕", size = 10.sp, color = Alert) }
         }
     }
     if (!canReply) {
@@ -475,7 +490,7 @@ private fun ReplyBar(store: Store, c: Conversation) {
         NeonButton(s(R.string.send), text.isNotBlank()) {
             val body = text.trim()
             text = ""
-            scope.launch {
+            appScope.launch {
                 if (!Actions.send(ctx, store, c, body)) {
                     text = body
                     Toast.makeText(ctx, s(R.string.send_failed, c.channel.label), Toast.LENGTH_LONG).show()

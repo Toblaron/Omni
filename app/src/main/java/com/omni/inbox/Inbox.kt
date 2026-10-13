@@ -87,7 +87,7 @@ internal fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () 
         SnoozeDialog(onDismiss = { snoozing = null }) { at ->
             snoozing = null
             askNotify()
-            scope.launch(Dispatchers.IO) { snooze(ctx, store, target, at) }
+            scope.launch(Dispatchers.IO) { failSoftly(ctx) { snooze(ctx, store, target, at) } }
         }
     }
 
@@ -152,9 +152,9 @@ internal fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () 
         } else {
             LazyColumn(Modifier.fillMaxSize()) {
                 fun swipe(cs: List<Conversation>) = SwipeActions(
-                    onDone = { scope.launch(Dispatchers.IO) { cs.forEach { store.markDone(it.key) } } },
+                    onDone = { scope.launch(Dispatchers.IO) { failSoftly(ctx) { cs.forEach { store.markDone(it.key) } } } },
                     onArchive = {
-                        scope.launch(Dispatchers.IO) { if (archiveView) restore(ctx, store, cs) else store.setArchived(cs.map { it.key }, true) }
+                        scope.launch(Dispatchers.IO) { failSoftly(ctx) { if (archiveView) restore(ctx, store, cs) else store.setArchived(cs.map { it.key }, true) } }
                     },
                     archiveLabel = s(if (archiveView) R.string.restore else R.string.archive),
                 )

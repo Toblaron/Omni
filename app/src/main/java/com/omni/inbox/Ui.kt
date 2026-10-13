@@ -123,13 +123,16 @@ private operator fun Regex.contains(text: String) = matches(text)
 fun App() {
     val ctx = LocalContext.current
     val store = remember { Store.get(ctx) }
-    // "inbox", "telegram", "settings", "search", or a conversation key
-    var route by rememberSaveable { mutableStateOf("inbox") }
-    var back by rememberSaveable { mutableStateOf("inbox") }
+    // back stack of routes: "inbox", "telegram", "settings", "stats", "search", "person:<key>" or a conversation key
+    var stack by rememberSaveable { mutableStateOf(listOf("inbox")) }
+    val route = stack.last()
     // message to scroll to and highlight when a chat opens from search
     var focus by rememberSaveable { mutableLongStateOf(0L) }
-    fun go(to: String, focusId: Long = 0L) { back = if (route in setOf("search", "settings", "stats")) route else "inbox"; route = to; focus = focusId }
-    fun up() { route = back; back = "inbox"; focus = 0L }
+    fun go(to: String, focusId: Long = 0L) {
+        if (to != route) stack = (stack - to) + to // revisiting a screen moves it to the top instead of stacking copies
+        focus = focusId
+    }
+    fun up() { if (stack.size > 1) stack = stack.dropLast(1); focus = 0L }
     val locked by AppLock.locked.collectAsState()
     val openRequest by MainActivity.openRequest.collectAsState()
     LaunchedEffect(openRequest) { openRequest?.let { go(it); MainActivity.openRequest.value = null } }
@@ -527,13 +530,13 @@ internal fun LinkDialog(store: Store, c: Conversation, onDismiss: () -> Unit) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (merged.isNotEmpty()) {
                     Text(s(R.string.merged_with, merged.joinToString { "${it.title} (${it.channel.label})" }), color = CyanDim, fontSize = 14.sp)
-                    NeonButton(s(R.string.unlink)) { scope.launch(Dispatchers.IO) { store.unlink(c.key) }; onDismiss() }
+                    NeonButton(s(R.string.unlink)) { appScope.launch(Dispatchers.IO) { store.unlink(c.key) }; onDismiss() }
                 }
                 Text(s(R.string.same_person), color = CyanDim, fontSize = 14.sp)
                 NeonField(q, { q = it }, s(R.string.filter), Modifier.fillMaxWidth())
                 LazyColumn(Modifier.heightIn(max = 300.dp)) {
                     items(candidates, key = { it.key }) { o ->
-                        Row(Modifier.fillMaxWidth().clickable { scope.launch(Dispatchers.IO) { store.link(c.key, o.key) }; onDismiss() }.padding(vertical = 8.dp),
+                        Row(Modifier.fillMaxWidth().clickable { appScope.launch(Dispatchers.IO) { store.link(c.key, o.key) }; onDismiss() }.padding(vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically) {
                             Hud(o.channel.label, size = 8.sp, color = Color(o.channel.color), modifier = Modifier.width(80.dp))
                             Text(o.title, maxLines = 1, overflow = TextOverflow.Ellipsis)

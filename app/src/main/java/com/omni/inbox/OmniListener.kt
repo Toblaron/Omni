@@ -17,12 +17,19 @@ import androidx.core.os.BundleCompat
 class OmniListener : NotificationListenerService() {
 
     override fun onListenerConnected() {
-        runCatching { activeNotifications }.getOrNull()?.forEach(::handle)
+        val current = runCatching { activeNotifications }.getOrNull().orEmpty()
+        work.execute { current.forEach(::handleSafely) }
         SmsSync.start(this)
         Telegram.start(this)
     }
 
-    override fun onNotificationPosted(sbn: StatusBarNotification) = handle(sbn)
+    // callbacks arrive on the main thread; database writes and picture decoding happen off it
+    override fun onNotificationPosted(sbn: StatusBarNotification) = work.execute { handleSafely(sbn) }
+
+    /** One odd notification must never take the app (which shares this process) down with it. */
+    private fun handleSafely(sbn: StatusBarNotification) {
+        runCatching { handle(sbn) }.onFailure { android.util.Log.e("OmniListener", "skipped a notification from ${sbn.packageName}", it) }
+    }
 
     private fun handle(sbn: StatusBarNotification) {
         val channel = Channel.forPackage(sbn.packageName) ?: return
@@ -46,7 +53,7 @@ class OmniListener : NotificationListenerService() {
                 if (channel == Channel.SNAPCHAT && Snapchat.isTyping(text)) continue
                 val sender = m.person?.name?.toString()
                 val outgoing = m.person == null || (me != null && sender == me)
-                val image = m.dataUri?.takeIf { m.dataMimeType?.startsWith("image/") == true }?.let { Thumbs.fromUri(this, it) }
+                val image = m.dataUri?.takeIf { m.dataMimeType?.startsWith("image/") == true }?.let { uri -> { Thumbs.fromUri(this, uri) } }
                 store.add(
                     channel, sbn.packageName, key, convTitle, if (outgoing) null else sender, text,
                     m.timestamp, outgoing, "$key|${m.timestamp}|${text.hashCode()}",
@@ -73,7 +80,7 @@ class OmniListener : NotificationListenerService() {
         val key = "${sbn.packageName}:${n.shortcutId ?: convTitle}"
         store.add(
             channel, sbn.packageName, key, convTitle, sender, text, sbn.postTime, false,
-            "$key|${n.`when`}|${text.hashCode()}", fuzzy = true, image = bigPicture(n),
+            "$key|${n.`when`}|${text.hashCode()}", fuzzy = true, image = { bigPicture(n) },
         )
         Replies.remember(key, n)
     }
@@ -85,7 +92,12 @@ class OmniListener : NotificationListenerService() {
     }
 
     companion object {
-        /** "3 new messages", "5 messages from 2 chats" and similar roll-ups. */
-        private val SUMMARY = Regex("""^\d+ (new )?messages?( from \d+ chats?)?$""", RegexOption.IGNORE_CASE)
+        private val work = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+        /** "3 new messages", "5 messages from 2 chats", "3 nye meldinger", "5 meldinger fra 2 samtaler" and similar roll-ups. */
+        private val SUMMARY = Regex(
+            """^\d+ (new )?messages?( from \d+ chats?)?$|^\d+ (nye? )?meldinger?( fra \d+ (samtaler?|chatter?|chater?))?$""",
+            RegexOption.IGNORE_CASE,
+        )
     }
 }

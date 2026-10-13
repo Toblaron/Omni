@@ -79,7 +79,7 @@ data class SearchHit(val id: Long, val convKey: String, val channel: Channel, va
  * All captured messages in a SQLCipher-encrypted database (passphrase from [Vault]).
  * [changes] bumps on every write so the UI can re-query.
  */
-class Store private constructor(private val ctx: Context, passphrase: ByteArray) :
+class Store private constructor(private val ctx: Context, private val passphrase: ByteArray) :
     SQLiteOpenHelper(ctx, DB_NAME, passphrase, null, VERSION, 0, null, null, true) {
 
     val changes = MutableStateFlow(0L)
@@ -152,7 +152,7 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
     fun add(
         channel: Channel, pkg: String?, convKey: String, convTitle: String, sender: String?,
         text: String, ts: Long, outgoing: Boolean, uniq: String, fuzzy: Boolean,
-        address: String? = null, notify: Boolean = true, revisable: Boolean = false, image: ByteArray? = null,
+        address: String? = null, notify: Boolean = true, revisable: Boolean = false, image: (() -> ByteArray?)? = null,
     ): Boolean {
         val db = writableDatabase
         db.rawQuery("SELECT 1 FROM deleted WHERE uniq=?", arrayOf(uniq)).use { if (it.moveToFirst()) return false }
@@ -169,7 +169,8 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
             put("body", text); put("ts", ts); put("outgoing", if (outgoing) 1 else 0); put("uniq", uniq)
             put("asks", if (Signals.asks(text)) 1 else 0)
         }, SQLiteDatabase.CONFLICT_IGNORE)
-        if (row != -1L && image != null) db.insert("media", null, ContentValues().apply { put("msg_id", row); put("jpeg", image) })
+        // pictures are decoded only for messages that are actually new, not on every notification re-post
+        if (row != -1L && image != null) image()?.let { jpeg -> db.insert("media", null, ContentValues().apply { put("msg_id", row); put("jpeg", jpeg) }) }
         if (row != -1L && notify) changed()
         return row != -1L
     }
@@ -345,10 +346,19 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
     fun purgeOlderThan(cutoff: Long) =
         purge("ts < ? AND conv_key NOT IN (SELECT conv_key FROM conv_state WHERE pinned=1)", arrayOf(cutoff))
 
+    /**
+     * A second, private connection for ATTACH work. ATTACH on the shared helper would switch it out
+     * of WAL mode, which throws while any other thread (UI, listener, sync) is using the database.
+     */
+    private fun <T> sideConnection(block: (SQLiteDatabase) -> T): T {
+        writableDatabase // make sure the schema is created/upgraded first
+        val db = SQLiteDatabase.openDatabase(ctx.getDatabasePath(DB_NAME).path, passphrase, null, SQLiteDatabase.OPEN_READWRITE, null)
+        return try { block(db) } finally { db.close() }
+    }
+
     /** Writes the whole database to [file], encrypted with [password] instead of the device key. */
-    fun exportTo(file: java.io.File, password: String) {
+    fun exportTo(file: java.io.File, password: String) = sideConnection { db ->
         file.delete()
-        val db = writableDatabase
         db.execSQL("ATTACH DATABASE ? AS bk KEY ?", arrayOf<Any>(file.path, password))
         try {
             db.rawQuery("SELECT sqlcipher_export('bk')", null).use { it.moveToFirst() }
@@ -361,14 +371,14 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
      * Merges a backup made by [exportTo] into this database; returns how many messages were new.
      * A wrong password fails on the first read. Manual cross-app links aren't restored.
      */
-    fun importFrom(file: java.io.File, password: String): Int {
-        val db = writableDatabase
+    fun importFrom(file: java.io.File, password: String): Int = sideConnection { db ->
         db.execSQL("ATTACH DATABASE ? AS bk KEY ?", arrayOf<Any>(file.path, password))
         try {
             fun count() = db.rawQuery("SELECT COUNT(*) FROM messages", null).use { it.moveToFirst(); it.getLong(0) }
             db.rawQuery("SELECT COUNT(*) FROM bk.messages", null).use { it.moveToFirst() } // throws on a wrong password
             val before = count()
-            inTransaction {
+            db.beginTransaction()
+            try {
                 db.execSQL("INSERT OR IGNORE INTO deleted(uniq) SELECT uniq FROM bk.deleted")
                 db.execSQL(
                     "INSERT OR IGNORE INTO messages(channel, pkg, conv_key, conv_title, address, sender, body, ts, outgoing, uniq, asks, revoked, original) " +
@@ -380,8 +390,11 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
                     "INSERT OR IGNORE INTO conv_state(conv_key, seen_ts, done_ts, pinned, archived_ts, muted, snooze_until, draft) " +
                         "SELECT conv_key, seen_ts, done_ts, pinned, archived_ts, muted, snooze_until, draft FROM bk.conv_state"
                 )
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
             }
-            return (count() - before).toInt().also { changed() }
+            (count() - before).toInt().also { changed() }
         } finally {
             db.execSQL("DETACH DATABASE bk")
         }
@@ -426,6 +439,8 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
 
     fun reminder(id: Long): Reminder? = reminders("id=?", arrayOf(id.toString())).firstOrNull()
     fun pendingReminders(): List<Reminder> = reminders("at > ?", arrayOf(System.currentTimeMillis().toString()))
+    /** Including overdue ones (the phone was off, or the app was updated, when they were due). */
+    fun allReminders(): List<Reminder> = reminders("1=1", emptyArray())
     fun deleteReminder(id: Long) = writableDatabase.execSQL("DELETE FROM reminders WHERE id=?", arrayOf<Any>(id))
 
     private fun reminders(where: String, args: Array<String>) =

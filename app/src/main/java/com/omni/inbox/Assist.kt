@@ -31,6 +31,8 @@ object Assist {
                 else -> State.UNAVAILABLE
             }
         }.getOrDefault(State.UNAVAILABLE)
+        // a download begun before the app restarted: follow it so the state flips to READY when done
+        if (state.value == State.DOWNLOADING) download()
     }
 
     /** Fetches the model through AICore (a few hundred MB, Wi-Fi recommended). */

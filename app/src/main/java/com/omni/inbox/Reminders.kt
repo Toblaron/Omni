@@ -43,8 +43,14 @@ object Reminders {
         }
     }
 
-    /** After a reboot alarms are gone; set them again from the store. */
-    fun rescheduleAll(ctx: Context) = Store.get(ctx).pendingReminders().forEach { schedule(ctx, it.id, it.at) }
+    /**
+     * Reboots and app updates wipe alarms; set them again from the store. Ones that came due
+     * meanwhile fire shortly, so a scheduled SMS or reminder is late rather than lost.
+     */
+    fun rescheduleAll(ctx: Context) {
+        val soon = System.currentTimeMillis() + 15_000
+        Store.get(ctx).allReminders().forEach { schedule(ctx, it.id, maxOf(it.at, soon)) }
+    }
 
     private fun schedule(ctx: Context, id: Long, at: Long) {
         val am = ctx.getSystemService(AlarmManager::class.java)
@@ -97,8 +103,12 @@ object Reminders {
             val pending = goAsync()
             Thread {
                 try {
-                    if (intent.action == Intent.ACTION_BOOT_COMPLETED) rescheduleAll(ctx)
-                    else fire(ctx, intent.getLongExtra(EXTRA_ID, -1))
+                    when (intent.action) {
+                        Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED -> rescheduleAll(ctx)
+                        else -> fire(ctx, intent.getLongExtra(EXTRA_ID, -1))
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("OmniReminders", "reminder failed", e)
                 } finally { pending.finish() }
             }.start()
         }

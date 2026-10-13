@@ -3,6 +3,7 @@ package com.omni.inbox
 import android.content.Context
 import io.github.up9cloud.td.JsonClient
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -47,7 +48,9 @@ object Telegram {
     private val users = ConcurrentHashMap<Long, String>()
     private val phones = ConcurrentHashMap<Long, String>() // user id → number, only for your contacts
     private val chats = ConcurrentHashMap<Long, String>()
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // a malformed update or a database error is logged, never allowed to crash the app
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO +
+        CoroutineExceptionHandler { _, e -> android.util.Log.e("OmniTelegram", "update failed", e) })
 
     private val loaded: Boolean by lazy {
         runCatching {

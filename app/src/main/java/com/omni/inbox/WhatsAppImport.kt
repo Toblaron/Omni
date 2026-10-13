@@ -27,15 +27,18 @@ object WhatsAppImport {
     fun read(ctx: Context, uri: Uri): Parsed {
         val name = ctx.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { if (it.moveToFirst()) it.getString(0) else null } ?: "WhatsApp chat"
-        val text = ctx.contentResolver.openInputStream(uri)!!.use { input ->
-            val bytes = input.readBytes()
-            if (bytes.size > 1 && bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte()) {
-                ZipInputStream(bytes.inputStream()).use { zip ->
+        // streamed: an export "with media" can be hundreds of MB, but only the chat text is read
+        val text = ctx.contentResolver.openInputStream(uri)!!.buffered().use { input ->
+            input.mark(2)
+            val zipped = input.read() == 'P'.code && input.read() == 'K'.code
+            input.reset()
+            if (zipped) {
+                ZipInputStream(input).let { zip ->
                     generateSequence { zip.nextEntry }.firstOrNull { it.name.endsWith(".txt", true) }
                         ?.let { zip.readBytes().toString(Charsets.UTF_8) }
                         ?: error("No chat text in this zip")
                 }
-            } else bytes.toString(Charsets.UTF_8)
+            } else input.readBytes().toString(Charsets.UTF_8)
         }
         return Parsed(titleFrom(name), parse(text))
     }

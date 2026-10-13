@@ -17,6 +17,7 @@ object SmsSync {
     private val io = Executors.newSingleThreadExecutor()
     private val names = HashMap<String, String>()
     private var observing = false
+    @Volatile private var fullImportDone = false
 
     fun canRead(ctx: Context) = granted(ctx, Manifest.permission.READ_SMS)
     fun canSend(ctx: Context) = granted(ctx, Manifest.permission.SEND_SMS)
@@ -28,7 +29,8 @@ object SmsSync {
     fun start(ctx: Context) {
         val app = ctx.applicationContext
         if (!canRead(app)) return
-        io.execute { import(app, 3000) }
+        // the deep import runs once per process; afterwards the observer picks up new messages
+        if (!fullImportDone) io.execute { if (!fullImportDone) { import(app, 3000); fullImportDone = true } }
         if (observing) return
         observing = true
         app.contentResolver.registerContentObserver(
@@ -39,7 +41,10 @@ object SmsSync {
         )
     }
 
-    private fun import(ctx: Context, limit: Int) {
+    private fun import(ctx: Context, limit: Int) = runCatching { importNow(ctx, limit) }
+        .onFailure { android.util.Log.e("OmniSms", "SMS import failed", it) }
+
+    private fun importNow(ctx: Context, limit: Int) {
         val store = Store.get(ctx)
         val pkg = Telephony.Sms.getDefaultSmsPackage(ctx)
         val cursor = ctx.contentResolver.query(
@@ -83,7 +88,8 @@ object SmsSync {
 
     /** Sends via the system; the sent row lands in the SMS database and comes back through the observer. */
     fun send(ctx: Context, address: String, text: String) {
-        val sms = ctx.getSystemService(SmsManager::class.java)
+        val sms = if (android.os.Build.VERSION.SDK_INT >= 31) ctx.getSystemService(SmsManager::class.java)
+        else @Suppress("DEPRECATION") SmsManager.getDefault()
         val parts = sms.divideMessage(text)
         if (parts.size > 1) sms.sendMultipartTextMessage(address, null, parts, null, null)
         else sms.sendTextMessage(address, null, text, null, null)

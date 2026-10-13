@@ -20,8 +20,11 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         applySecureFlag()
         setContent { OmniTheme { App() } }
-        handleShare(intent)
-        handleOpen(intent)
+        // after a rotation or process restore the intent was already handled
+        if (savedInstanceState == null) {
+            handleShare(intent)
+            handleOpen(intent)
+        }
     }
 
     override fun onNewIntent(intent: android.content.Intent) {

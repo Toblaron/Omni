@@ -1,6 +1,10 @@
 package com.omni.inbox
 
 import android.app.Application
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import androidx.annotation.PluralsRes
 import androidx.annotation.StringRes
 
@@ -18,6 +22,13 @@ class OmniApp : Application() {
             private set
     }
 }
+
+/**
+ * For work that must finish even when the screen that started it closes (a dialog dismissing
+ * itself, leaving a chat mid-send). Screen-bound coroutine scopes are cancelled on exit.
+ */
+internal val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main +
+    CoroutineExceptionHandler { _, e -> android.util.Log.e("OmniInbox", "background action failed", e) })
 
 /**
  * A translated string (values/ English, values-nb/ Norwegian), usable from composables, toasts,

@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.text.DateFormat
 
 /** Sending and jumping out to the source app, shared by the reply bar, forwarding and reminders. */
@@ -16,8 +18,13 @@ object Actions {
     fun canSend(ctx: Context, c: Conversation): Boolean =
         (tgChat(c) != null && Telegram.auth.value == Telegram.Auth.Ready) || (isSms(c) && SmsSync.canSend(ctx)) || Replies.canReply(c.key)
 
-    /** Sends [body] into [c]; false when the channel can't take it right now. */
-    suspend fun send(ctx: Context, store: Store, c: Conversation, body: String): Boolean {
+    /** Sends [body] into [c]; false when the channel can't take it right now (or anything failed). */
+    suspend fun send(ctx: Context, store: Store, c: Conversation, body: String): Boolean = withContext(Dispatchers.IO) {
+        runCatching { sendNow(ctx, store, c, body) }
+            .onFailure { android.util.Log.e("OmniActions", "send failed", it) }.getOrDefault(false)
+    }
+
+    private suspend fun sendNow(ctx: Context, store: Store, c: Conversation, body: String): Boolean {
         val tg = tgChat(c)
         return when {
             tg != null && Telegram.auth.value == Telegram.Auth.Ready -> Telegram.sendText(tg, body) == null
@@ -35,14 +42,16 @@ object Actions {
     fun canSchedule(ctx: Context, c: Conversation): Boolean =
         (tgChat(c) != null && Telegram.auth.value == Telegram.Auth.Ready) || (isSms(c) && SmsSync.canSend(ctx))
 
-    /** Sends [body] into [c] at [at]; false if this chat can't schedule. */
-    suspend fun schedule(ctx: Context, c: Conversation, body: String, at: Long): Boolean {
-        val tg = tgChat(c)
-        return when {
-            tg != null && Telegram.auth.value == Telegram.Auth.Ready -> Telegram.sendText(tg, body, at) == null
-            isSms(c) && SmsSync.canSend(ctx) -> { Reminders.add(ctx, c.key, at, body, Reminder.KIND_SEND); true }
-            else -> false
-        }
+    /** Sends [body] into [c] at [at]; false if this chat can't schedule (or anything failed). */
+    suspend fun schedule(ctx: Context, c: Conversation, body: String, at: Long): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            val tg = tgChat(c)
+            when {
+                tg != null && Telegram.auth.value == Telegram.Auth.Ready -> Telegram.sendText(tg, body, at) == null
+                isSms(c) && SmsSync.canSend(ctx) -> { Reminders.add(ctx, c.key, at, body, Reminder.KIND_SEND); true }
+                else -> false
+            }
+        }.onFailure { android.util.Log.e("OmniActions", "schedule failed", it) }.getOrDefault(false)
     }
 
     /** Opens [c] in its own app: a deep link where one exists, else the notification's tap target, else the app. */
