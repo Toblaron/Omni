@@ -77,7 +77,7 @@ internal fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () 
     fun act(block: suspend (List<Conversation>) -> Unit) {
         val target = pickedChats()
         picked.clear()
-        scope.launch(Dispatchers.IO) { block(target) }
+        scope.launch(Dispatchers.IO) { failSoftly(ctx) { block(target) } }
     }
     val selection = Selection(picked, { plural(R.plurals.delete_chats, it) }) { act { cs -> store.deleteConversations(cs.map { it.key }) } }
 
@@ -127,10 +127,7 @@ internal fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () 
             TelegramBadge(onTelegram)
         }
         SetupCard()
-        Row(
-            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        ScrollHintRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)) {
             fun toggle(v: View) { view = if (view == v) View.ALL else v; picked.clear() }
             Chip(s(R.string.chip_all), Cyan, filter == null && view == View.ALL) { filter = null; view = View.ALL; picked.clear() }
             Chip(s(R.string.chip_reply, waiting), Alert, view == View.REPLY) { toggle(View.REPLY) }
@@ -188,6 +185,14 @@ internal fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () 
                 }
             }
         }
+    }
+}
+
+/** Runs a user action; a failure shows a short note instead of closing the app. */
+internal suspend fun failSoftly(ctx: android.content.Context, block: suspend () -> Unit) {
+    runCatching { block() }.onFailure {
+        android.util.Log.e("OmniInbox", "action failed", it)
+        withContext(Dispatchers.Main) { android.widget.Toast.makeText(ctx, s(R.string.action_failed, it.message ?: it.javaClass.simpleName), android.widget.Toast.LENGTH_LONG).show() }
     }
 }
 

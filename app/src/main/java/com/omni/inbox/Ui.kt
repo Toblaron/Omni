@@ -16,6 +16,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -403,7 +404,7 @@ private fun KeepSetting() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Hud(s(R.string.keep_messages), size = 11.sp)
         Text(s(R.string.keep_text), color = CyanDim, fontSize = 14.sp)
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ScrollHintRow {
             Housekeeping.KEEP_CHOICES.forEach { (d, label) ->
                 Chip(s(label), Cyan, d == days) { days = d; scope.launch(Dispatchers.IO) { Housekeeping.setKeepDays(ctx, d) } }
             }
@@ -585,3 +586,38 @@ private fun ImportScreen(state: ImportState.State, onDone: (String?) -> Unit) {
         }
     }
 }
+
+/**
+ * A sideways-scrolling row that shows it can scroll: the edges fade out and a ‹ / › appears on
+ * each side that has more content. Tapping an arrow scrolls that way.
+ */
+@Composable
+internal fun ScrollHintRow(
+    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+    spacing: androidx.compose.ui.unit.Dp = 8.dp,
+    content: @Composable RowScope.() -> Unit,
+) {
+    val state = rememberScrollState()
+    val scope = rememberCoroutineScope()
+    Box(modifier) {
+        Row(
+            Modifier.horizontalScroll(state).padding(contentPadding),
+            horizontalArrangement = Arrangement.spacedBy(spacing), verticalAlignment = Alignment.CenterVertically,
+            content = content,
+        )
+        Row(Modifier.matchParentSize()) {
+            if (state.canScrollBackward) ScrollHint("‹", listOf(Void, Void.copy(alpha = 0f))) { scope.launch { state.animateScrollBy(-400f) } }
+            Spacer(Modifier.weight(1f))
+            if (state.canScrollForward) ScrollHint("›", listOf(Void.copy(alpha = 0f), Void)) { scope.launch { state.animateScrollBy(400f) } }
+        }
+    }
+}
+
+@Composable
+private fun ScrollHint(arrow: String, fade: List<Color>, onClick: () -> Unit) =
+    Box(
+        Modifier.width(44.dp).fillMaxHeight().background(androidx.compose.ui.graphics.Brush.horizontalGradient(fade))
+            .clickable(onClick = onClick),
+        contentAlignment = if (arrow == "‹") Alignment.CenterStart else Alignment.CenterEnd,
+    ) { Text(arrow, Modifier.padding(horizontal = 6.dp), color = Cyan, fontFamily = Head, fontSize = 22.sp, fontWeight = FontWeight.Bold) }

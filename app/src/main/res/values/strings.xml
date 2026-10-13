@@ -205,4 +205,5 @@
         <item quantity="one">Delete %d chat?</item>
         <item quantity="other">Delete %d chats?</item>
     </plurals>
+    <string name="action_failed">Something went wrong: %s</string>
 </resources>

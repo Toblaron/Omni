@@ -205,4 +205,5 @@
         <item quantity="one">Slette %d samtale?</item>
         <item quantity="other">Slette %d samtaler?</item>
     </plurals>
+    <string name="action_failed">Noe gikk galt: %s</string>
 </resources>

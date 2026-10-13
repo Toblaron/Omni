@@ -132,6 +132,16 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
             db.execSQL("CREATE TRIGGER messages_media_ad AFTER DELETE ON messages BEGIN DELETE FROM media WHERE msg_id = old.id; END")
             db.execSQL("ALTER TABLE reminders ADD COLUMN kind TEXT NOT NULL DEFAULT 'remind'")
         }
+        if (old < 6) {
+            // An external-content FTS4 index reads the row it removes, so entries must go BEFORE the
+            // row is deleted or rewritten. The old after-delete / 'delete'-command triggers made every
+            // delete and edit fail with "SQL logic error".
+            db.execSQL("DROP TRIGGER IF EXISTS messages_ad")
+            db.execSQL("DROP TRIGGER IF EXISTS messages_bu")
+            db.execSQL("CREATE TRIGGER messages_bd BEFORE DELETE ON messages BEGIN DELETE FROM messages_fts WHERE docid = old.id; END")
+            db.execSQL("CREATE TRIGGER messages_bu BEFORE UPDATE OF body ON messages BEGIN DELETE FROM messages_fts WHERE docid = old.id; END")
+            db.execSQL("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+        }
     }
 
     /**
@@ -472,7 +482,7 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
 
     companion object {
         private const val DB_NAME = "omni-vault.db"
-        private const val VERSION = 5
+        private const val VERSION = 6
         private const val FOLLOW_UP_MIN = 2 * 86_400_000L
         private const val FOLLOW_UP_MAX = 14 * 86_400_000L
         private val WA_JID = Regex("""(\d{6,15})@s\.whatsapp\.net""")

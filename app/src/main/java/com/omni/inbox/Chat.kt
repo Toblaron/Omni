@@ -104,7 +104,7 @@ internal fun PersonScreen(store: Store, personKey: String, onOpenChat: (String) 
         Rule()
         MessageList(Modifier.weight(1f), messages, chatOf, showApp = true, selection, focusId = 0L)
         Rule()
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        ScrollHintRow(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp), spacing = 6.dp) {
             Hud(s(R.string.via), size = 8.sp, color = CyanDim)
             p.chats.forEach { chat ->
                 Chip(chat.channel.label, Color(chat.channel.color), chat.key == target.key) { replyKey = chat.key }
@@ -308,6 +308,7 @@ internal class Selection<T>(val ids: MutableSet<T>, val deleteTitle: (Int) -> St
 /** [onEmpty] runs when a delete leaves no messages, since the chat itself is then gone. */
 @Composable
 private fun rememberSelection(store: Store, messages: List<Msg>, onEmpty: () -> Unit): Selection<Long> {
+    val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val ids = remember { mutableStateSetOf<Long>() }
     // drop ids that vanished (deleted elsewhere, or after our own delete)
@@ -319,8 +320,9 @@ private fun rememberSelection(store: Store, messages: List<Msg>, onEmpty: () -> 
             val emptied = messages.all { it.id in ids }
             ids.clear()
             scope.launch {
-                withContext(Dispatchers.IO) { store.delete(doomed) }
-                if (emptied) onEmpty()
+                var ok = false
+                withContext(Dispatchers.IO) { failSoftly(ctx) { store.delete(doomed); ok = true } }
+                if (ok && emptied) onEmpty()
             }
         }
     }
