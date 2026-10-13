@@ -140,7 +140,7 @@ object Telegram {
                     "database_encryption_key" to if (p.getBoolean("db_keyed", false)) dbKey() else "",
                     "api_id" to p.getInt("api_id", 0), "api_hash" to p.getString("api_hash", ""),
                     "system_language_code" to java.util.Locale.getDefault().language, "device_model" to "Omni Inbox",
-                    "application_version" to "0.3",
+                    "application_version" to "0.3.1",
                 ))
             }
             "authorizationStateWaitPhoneNumber" -> auth.value = Auth.WaitPhone
