@@ -24,8 +24,8 @@ object ImportState {
         val app = ctx.applicationContext
         scope.launch {
             state.value = runCatching { WhatsAppImport.read(app, uri) }.fold(
-                { if (it.lines.isEmpty()) State.Failed("No WhatsApp messages found in that file.") else State.Ready(it) },
-                { State.Failed(it.message ?: "Couldn't read that file.") },
+                { if (it.lines.isEmpty()) State.Failed(s(R.string.no_wa_messages)) else State.Ready(it) },
+                { State.Failed(it.message ?: s(R.string.unreadable_file)) },
             )
         }
     }

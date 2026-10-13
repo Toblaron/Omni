@@ -8,7 +8,7 @@ import java.io.File
 object Housekeeping {
     private const val DAY = 86_400_000L
     /** Keep-for choices in days; 0 = forever. */
-    val KEEP_CHOICES = listOf(0 to "Forever", 365 to "1 year", 90 to "90 days", 30 to "30 days")
+    val KEEP_CHOICES = listOf(0 to R.string.keep_forever, 365 to R.string.keep_year, 90 to R.string.keep_90, 30 to R.string.keep_30)
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
     fun keepDays(ctx: Context) = prefs(ctx).getInt("keep_days", 0)

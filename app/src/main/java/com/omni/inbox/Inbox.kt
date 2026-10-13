@@ -79,7 +79,7 @@ internal fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () 
         picked.clear()
         scope.launch(Dispatchers.IO) { block(target) }
     }
-    val selection = Selection(picked, "chat") { act { cs -> store.deleteConversations(cs.map { it.key }) } }
+    val selection = Selection(picked, { plural(R.plurals.delete_chats, it) }) { act { cs -> store.deleteConversations(cs.map { it.key }) } }
 
     val askNotify = rememberNotifyPermission()
     var snoozing by remember { mutableStateOf<List<Conversation>?>(null) }
@@ -96,33 +96,33 @@ internal fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () 
             val sel = pickedChats()
             val allPinned = sel.isNotEmpty() && sel.all { it.pinned }
             val allMuted = sel.isNotEmpty() && sel.all { it.muted }
-            MenuItem(if (allPinned) "Unpin" else "Pin") { close(); act { store.setPinned(it.map(Conversation::key), !allPinned) } }
-            MenuItem(if (allMuted) "Unmute" else "Mute") { close(); act { store.setMuted(it.map(Conversation::key), !allMuted) } }
-            if (archiveView) MenuItem("Restore") { close(); act { restore(ctx, store, it) } }
-            else MenuItem("Archive") { close(); act { store.setArchived(it.map(Conversation::key), true) } }
-            MenuItem("Snooze…") { close(); snoozing = sel; picked.clear() }
-            MenuItem("Mark done") { close(); act { cs -> cs.forEach { store.markDone(it.key) } } }
+            MenuItem(s(if (allPinned) R.string.unpin else R.string.pin)) { close(); act { store.setPinned(it.map(Conversation::key), !allPinned) } }
+            MenuItem(s(if (allMuted) R.string.unmute else R.string.mute)) { close(); act { store.setMuted(it.map(Conversation::key), !allMuted) } }
+            if (archiveView) MenuItem(s(R.string.restore)) { close(); act { restore(ctx, store, it) } }
+            else MenuItem(s(R.string.archive)) { close(); act { store.setArchived(it.map(Conversation::key), true) } }
+            MenuItem(s(R.string.snooze_menu)) { close(); snoozing = sel; picked.clear() }
+            MenuItem(s(R.string.mark_done)) { close(); act { cs -> cs.forEach { store.markDone(it.key) } } }
         }
         else Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 18.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Hud("Omni//Inbox", size = 22.sp, bold = true)
-                Hud("${live.size} channels · $waiting awaiting reply", size = 9.sp, color = CyanDim)
+                Hud(s(R.string.inbox_subtitle, live.size, waiting), size = 9.sp, color = CyanDim)
             }
             val ai by Assist.state.collectAsState()
             var briefing by remember { mutableStateOf(false) }
             if (ai == Assist.State.READY && waiting > 0) {
-                HudButton("✦ Brief") { briefing = true }
+                HudButton(s(R.string.brief_button)) { briefing = true }
                 Spacer(Modifier.width(6.dp))
             }
-            if (briefing) AiDialog("Waiting on you", onDismiss = { briefing = false }) {
+            if (briefing) AiDialog(s(R.string.waiting_on_you), onDismiss = { briefing = false }) {
                 withContext(Dispatchers.IO) {
                     val who = People.group(live).filter { it.needsReply }.take(8)
                     Assist.brief(who.map { p -> p.name to store.messages(p.chats.filter { it.needsReply }.map { it.key }) })
                 }
             }
-            HudButton("Find", onSearch)
+            HudButton(s(R.string.find), onSearch)
             Spacer(Modifier.width(6.dp))
-            HudButton("Sys", onSettings)
+            HudButton(s(R.string.sys), onSettings)
             Spacer(Modifier.width(6.dp))
             TelegramBadge(onTelegram)
         }
@@ -132,24 +132,23 @@ internal fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () 
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             fun toggle(v: View) { view = if (view == v) View.ALL else v; picked.clear() }
-            Chip("All", Cyan, filter == null && view == View.ALL) { filter = null; view = View.ALL; picked.clear() }
-            Chip("Reply · $waiting", Alert, view == View.REPLY) { toggle(View.REPLY) }
-            if (following > 0 || view == View.FOLLOW_UP) Chip("Follow-up · $following", Alert, view == View.FOLLOW_UP) { toggle(View.FOLLOW_UP) }
-            if (vips.isNotEmpty() || view == View.VIP) Chip("★ VIP", Cyan, view == View.VIP) { toggle(View.VIP) }
-            Chip(if (peopleMode) "People" else "Chats", CyanDim, peopleMode) { peopleMode = !peopleMode; picked.clear() }
+            Chip(s(R.string.chip_all), Cyan, filter == null && view == View.ALL) { filter = null; view = View.ALL; picked.clear() }
+            Chip(s(R.string.chip_reply, waiting), Alert, view == View.REPLY) { toggle(View.REPLY) }
+            if (following > 0 || view == View.FOLLOW_UP) Chip(s(R.string.chip_follow_up, following), Alert, view == View.FOLLOW_UP) { toggle(View.FOLLOW_UP) }
+            if (vips.isNotEmpty() || view == View.VIP) Chip(s(R.string.chip_vip), Cyan, view == View.VIP) { toggle(View.VIP) }
+            Chip(s(if (peopleMode) R.string.chip_people else R.string.chip_chats), CyanDim, peopleMode) { peopleMode = !peopleMode; picked.clear() }
             Channel.entries.forEach { ch ->
                 val unread = live.count { it.channel == ch && it.unread && !it.muted }
                 Chip(if (unread > 0) "${ch.label} · $unread" else ch.label, Color(ch.color), filter == ch) { filter = if (filter == ch) null else ch }
             }
-            Chip("Archive · $hiddenCount", CyanDim, archiveView) { toggle(View.ARCHIVE) }
+            Chip(s(R.string.chip_archive, hiddenCount), CyanDim, archiveView) { toggle(View.ARCHIVE) }
         }
         Rule()
         val empty = if (peopleMode) people.isEmpty() else chats.isEmpty()
         if (empty) {
             Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
                 Text(
-                    if (archiveView) "// ARCHIVE EMPTY\nArchived and snoozed chats wait here until something new arrives."
-                    else "// NO SIGNAL\nNew messages from your apps appear here as they arrive.",
+                    s(if (archiveView) R.string.archive_empty else R.string.no_signal),
                     color = CyanDim,
                 )
             }
@@ -160,7 +159,7 @@ internal fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () 
                     onArchive = {
                         scope.launch(Dispatchers.IO) { if (archiveView) restore(ctx, store, cs) else store.setArchived(cs.map { it.key }, true) }
                     },
-                    archiveLabel = if (archiveView) "Restore" else "Archive",
+                    archiveLabel = s(if (archiveView) R.string.restore else R.string.archive),
                 )
                 if (peopleMode) items(people, key = { it.key }) { p ->
                     SwipeRow(swipe(p.chats), enabled = !selection.active) {
@@ -197,7 +196,7 @@ private enum class View { ALL, REPLY, FOLLOW_UP, VIP, ARCHIVE }
 private fun snooze(ctx: android.content.Context, store: Store, chats: List<Conversation>, at: Long) {
     store.snooze(chats.map { it.key }, at)
     // one nudge per person/chat is enough
-    chats.distinctBy { People.normalizeName(it.title) }.forEach { Reminders.add(ctx, it.key, at, "Snoozed chat is back · ${it.lastText}") }
+    chats.distinctBy { People.normalizeName(it.title) }.forEach { Reminders.add(ctx, it.key, at, s(R.string.snoozed_back, it.lastText)) }
 }
 
 private fun restore(ctx: android.content.Context, store: Store, chats: List<Conversation>) {
@@ -230,12 +229,12 @@ private fun InboxRow(
                 if (vip) Hud("★", size = 10.sp, modifier = Modifier.padding(end = 5.dp))
                 Text(title, Modifier.weight(1f), fontWeight = if (unread) FontWeight.Bold else FontWeight.Normal,
                     color = nameColor, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (muted) { Hud("muted", size = 7.sp, color = CyanDim); Spacer(Modifier.width(6.dp)) }
+                if (muted) { Hud(s(R.string.tag_muted), size = 7.sp, color = CyanDim); Spacer(Modifier.width(6.dp)) }
                 if (needsReply) {
-                    Hud("↩ reply", size = 7.sp, color = Alert, modifier = Modifier.border(1.dp, Alert.copy(alpha = 0.6f), Tag).padding(horizontal = 5.dp, vertical = 2.dp))
+                    Hud(s(R.string.tag_reply), size = 7.sp, color = Alert, modifier = Modifier.border(1.dp, Alert.copy(alpha = 0.6f), Tag).padding(horizontal = 5.dp, vertical = 2.dp))
                     Spacer(Modifier.width(6.dp))
                 } else if (followUp) {
-                    Hud("⏳ follow up", size = 7.sp, color = Alert, modifier = Modifier.border(1.dp, Alert.copy(alpha = 0.4f), Tag).padding(horizontal = 5.dp, vertical = 2.dp))
+                    Hud(s(R.string.tag_follow_up), size = 7.sp, color = Alert, modifier = Modifier.border(1.dp, Alert.copy(alpha = 0.4f), Tag).padding(horizontal = 5.dp, vertical = 2.dp))
                     Spacer(Modifier.width(6.dp))
                 }
                 if (snoozeUntil > System.currentTimeMillis()) Hud("💤 " + snoozeLabel(snoozeUntil), size = 8.sp, color = CyanDim)
@@ -244,7 +243,7 @@ private fun InboxRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 tags()
                 Spacer(Modifier.width(8.dp))
-                if (draft != null) Text("Draft: $draft", fontSize = 15.sp, color = Alert, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (draft != null) Text(s(R.string.draft, draft), fontSize = 15.sp, color = Alert, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 else {
                     val preview = if (c.lastSender != null && c.lastSender != c.title) "${c.lastSender}: ${c.lastText}" else c.lastText
                     Text(preview, fontSize = 15.sp, color = CyanDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -271,7 +270,7 @@ private fun SwipeRow(actions: SwipeActions, enabled: Boolean, content: @Composab
                 Modifier.fillMaxSize().background(if (right) Cyan.copy(alpha = 0.18f) else Alert.copy(alpha = 0.18f)).padding(horizontal = 24.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = if (right) Arrangement.Start else Arrangement.End,
-            ) { Hud(if (right) "Done ✓" else actions.archiveLabel, size = 11.sp, color = if (right) Cyan else Alert, bold = true) }
+            ) { Hud(if (right) s(R.string.done) else actions.archiveLabel, size = 11.sp, color = if (right) Cyan else Alert, bold = true) }
         },
     ) { content() }
 }
@@ -279,7 +278,7 @@ private fun SwipeRow(actions: SwipeActions, enabled: Boolean, content: @Composab
 // ---------- snooze ----------
 
 /** Preset wake-up times, from [now]: in an hour, this/tomorrow evening, tomorrow morning, next Monday. */
-internal fun snoozeOptions(now: Long): List<Pair<String, Long>> {
+internal fun snoozeOptions(now: Long): List<Pair<Int, Long>> {
     fun at(daysAhead: Int, hour: Int) = Calendar.getInstance().apply {
         timeInMillis = now; add(Calendar.DAY_OF_YEAR, daysAhead)
         set(Calendar.HOUR_OF_DAY, hour); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
@@ -287,11 +286,11 @@ internal fun snoozeOptions(now: Long): List<Pair<String, Long>> {
     val today = Calendar.getInstance().apply { timeInMillis = now }
     val toMonday = ((Calendar.MONDAY - today.get(Calendar.DAY_OF_WEEK) + 7) % 7).let { if (it == 0) 7 else it }
     return buildList {
-        add("In 1 hour" to now + 3_600_000)
-        if (today.get(Calendar.HOUR_OF_DAY) < 17) add("This evening · 18:00" to at(0, 18))
-        else add("Tomorrow evening · 18:00" to at(1, 18))
-        add("Tomorrow morning · 08:00" to at(1, 8))
-        add("Next week · Mon 08:00" to at(toMonday, 8))
+        add(R.string.snooze_hour to now + 3_600_000)
+        if (today.get(Calendar.HOUR_OF_DAY) < 17) add(R.string.snooze_evening to at(0, 18))
+        else add(R.string.snooze_tomorrow_evening to at(1, 18))
+        add(R.string.snooze_tomorrow_morning to at(1, 8))
+        add(R.string.snooze_next_week to at(toMonday, 8))
     }
 }
 
@@ -303,15 +302,15 @@ private fun SnoozeDialog(onDismiss: () -> Unit, onPick: (Long) -> Unit) {
     val options = remember { snoozeOptions(System.currentTimeMillis()) }
     AlertDialog(
         onDismissRequest = onDismiss, containerColor = Panel, shape = Angled,
-        title = { Hud("Snooze until", size = 12.sp, bold = true) },
+        title = { Hud(s(R.string.snooze_until), size = 12.sp, bold = true) },
         text = {
             Column {
                 options.forEach { (label, at) ->
-                    Text(label, Modifier.fillMaxWidth().combinedClickable(onClick = { onPick(at) }).padding(vertical = 12.dp), color = Cyan, fontSize = 17.sp)
+                    Text(s(label), Modifier.fillMaxWidth().combinedClickable(onClick = { onPick(at) }).padding(vertical = 12.dp), color = Cyan, fontSize = 17.sp)
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Hud("Cancel", size = 9.sp) } },
+        confirmButton = { TextButton(onClick = onDismiss) { Hud(s(R.string.cancel), size = 9.sp) } },
     )
 }
 

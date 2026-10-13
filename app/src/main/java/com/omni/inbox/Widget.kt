@@ -42,7 +42,7 @@ class Widget : AppWidgetProvider() {
             val count = runCatching { waiting(ctx).size }.getOrNull() ?: return
             for (id in ids) {
                 val views = RemoteViews(ctx.packageName, R.layout.widget).apply {
-                    setTextViewText(R.id.count, if (count > 0) "$count AWAITING" else "")
+                    setTextViewText(R.id.count, if (count > 0) s(R.string.widget_count, count) else "")
                     setRemoteAdapter(R.id.list, Intent(ctx, Rows::class.java).putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id))
                     setEmptyView(R.id.list, R.id.empty)
                     setOnClickPendingIntent(R.id.header, PendingIntent.getActivity(

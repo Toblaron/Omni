@@ -136,8 +136,8 @@ object Telegram {
                     "use_message_database" to true, "use_secret_chats" to false,
                     "database_encryption_key" to if (p.getBoolean("db_keyed", false)) dbKey() else "",
                     "api_id" to p.getInt("api_id", 0), "api_hash" to p.getString("api_hash", ""),
-                    "system_language_code" to "en", "device_model" to "Omni Inbox",
-                    "application_version" to "0.2",
+                    "system_language_code" to java.util.Locale.getDefault().language, "device_model" to "Omni Inbox",
+                    "application_version" to "0.3",
                 ))
             }
             "authorizationStateWaitPhoneNumber" -> auth.value = Auth.WaitPhone
@@ -170,11 +170,11 @@ object Telegram {
         if (syncing) return
         syncing = true
         try {
-            status.value = "Loading chats…"
+            status.value = s(R.string.tg_loading)
             val ids = query(obj("getChats", "chat_list" to obj("chatListMain"), "limit" to HISTORY_CHATS))
                 .optJSONArray("chat_ids").longs()
             for ((i, chatId) in ids.withIndex()) {
-                status.value = "Syncing chat ${i + 1}/${ids.size}"
+                status.value = s(R.string.tg_syncing, i + 1, ids.size)
                 var from = 0L
                 var got = 0
                 while (got < HISTORY_PER_CHAT) {
@@ -189,9 +189,9 @@ object Telegram {
                 }
                 Store.get(app).changed()
             }
-            status.value = "Synced ${ids.size} chats"
+            status.value = s(R.string.tg_synced, ids.size)
         } catch (e: Exception) {
-            status.value = "Sync stopped: ${e.message}"
+            status.value = s(R.string.tg_sync_stopped, e.message ?: "")
         } finally {
             syncing = false
         }
@@ -248,18 +248,18 @@ object Telegram {
         fun media(label: String) = if (caption != null) "$label · $caption" else label
         return when (val type = c.optString("@type")) {
             "messageText" -> c.optJSONObject("text")?.optString("text")
-            "messagePhoto" -> media("📷 Photo")
-            "messageVideo" -> media("🎬 Video")
+            "messagePhoto" -> media(s(R.string.media_photo))
+            "messageVideo" -> media(s(R.string.media_video))
             "messageAnimation" -> media("GIF")
-            "messageVoiceNote" -> media("🎤 Voice message")
-            "messageVideoNote" -> "📹 Video message"
-            "messageAudio" -> media("🎵 " + (c.optJSONObject("audio")?.optString("title")?.ifBlank { null } ?: "Audio"))
-            "messageDocument" -> media("📎 " + (c.optJSONObject("document")?.optString("file_name")?.ifBlank { null } ?: "File"))
-            "messageSticker" -> (c.optJSONObject("sticker")?.optString("emoji") ?: "") + " Sticker"
-            "messageLocation", "messageVenue" -> "📍 Location"
-            "messageContact" -> "👤 Contact"
-            "messagePoll" -> "📊 " + (c.optJSONObject("poll")?.let { p -> p.optJSONObject("question")?.optString("text") ?: p.optString("question") } ?: "Poll")
-            "messageCall" -> "📞 Call"
+            "messageVoiceNote" -> media(s(R.string.media_voice))
+            "messageVideoNote" -> s(R.string.media_video_note)
+            "messageAudio" -> media("🎵 " + (c.optJSONObject("audio")?.optString("title")?.ifBlank { null } ?: s(R.string.media_audio)))
+            "messageDocument" -> media("📎 " + (c.optJSONObject("document")?.optString("file_name")?.ifBlank { null } ?: s(R.string.media_file)))
+            "messageSticker" -> (c.optJSONObject("sticker")?.optString("emoji") ?: "") + " " + s(R.string.media_sticker)
+            "messageLocation", "messageVenue" -> s(R.string.media_location)
+            "messageContact" -> s(R.string.media_contact)
+            "messagePoll" -> "📊 " + (c.optJSONObject("poll")?.let { p -> p.optJSONObject("question")?.optString("text") ?: p.optString("question") } ?: s(R.string.media_poll))
+            "messageCall" -> s(R.string.media_call)
             else -> if (type.startsWith("messageChat") || type.startsWith("messagePin") || type.startsWith("messageBasicGroup") ||
                 type.startsWith("messageSupergroup") || type == "messageContactRegistered" || type == "messageScreenshotTaken"
             ) null else "[${type.removePrefix("message")}]"

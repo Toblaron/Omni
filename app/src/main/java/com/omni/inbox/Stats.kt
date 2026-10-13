@@ -52,8 +52,8 @@ object Stats {
 
     /** "4 min", "2 h", "3 d". */
     fun duration(ms: Long): String = when {
-        ms < 3_600_000 -> "${(ms / 60_000).coerceAtLeast(1)} min"
-        ms < 86_400_000 -> "${ms / 3_600_000} h"
-        else -> "${ms / 86_400_000} d"
+        ms < 3_600_000 -> s(R.string.dur_min, (ms / 60_000).coerceAtLeast(1))
+        ms < 86_400_000 -> s(R.string.dur_hours, ms / 3_600_000)
+        else -> s(R.string.dur_days, ms / 86_400_000)
     }
 }

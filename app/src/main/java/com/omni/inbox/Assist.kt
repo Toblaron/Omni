@@ -41,11 +41,11 @@ object Assist {
                 when (s) {
                     is DownloadStatus.DownloadProgress -> progress.value = "${s.totalBytesDownloaded / 1_000_000} MB"
                     is DownloadStatus.DownloadCompleted -> state.value = State.READY
-                    is DownloadStatus.DownloadFailed -> { state.value = State.DOWNLOADABLE; progress.value = "Download failed" }
+                    is DownloadStatus.DownloadFailed -> { state.value = State.DOWNLOADABLE; progress.value = s(R.string.ai_download_failed) }
                     else -> {}
                 }
             }
-        }.onFailure { state.value = State.DOWNLOADABLE; progress.value = "Download failed" }
+        }.onFailure { state.value = State.DOWNLOADABLE; progress.value = s(R.string.ai_download_failed) }
     }
 
     /** A few sentences on what happened and what's being asked of you. */

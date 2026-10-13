@@ -79,7 +79,7 @@ class MainActivity : FragmentActivity() {
         }).authenticate(
             BiometricPrompt.PromptInfo.Builder()
                 .setTitle("Omni Inbox")
-                .setSubtitle("Unlock your messages")
+                .setSubtitle(s(R.string.unlock_prompt))
                 .setAllowedAuthenticators(AppLock.AUTHENTICATORS)
                 .build()
         )

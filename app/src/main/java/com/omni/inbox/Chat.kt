@@ -60,9 +60,9 @@ internal fun ConversationScreen(store: Store, key: String, focusId: Long, onBack
                 Hud(c.channel.label, size = 8.sp, color = Color(c.channel.color))
             }
             CatchUpButton(c.title) { messages }
-            if (c.needsReply) TextButton(onClick = { scope.launch(Dispatchers.IO) { store.markDone(key) } }) { Hud("Done ✓", size = 9.sp, color = Alert) }
-            if (!c.isGroup) TextButton(onClick = { linking = true }) { Hud("Link", size = 9.sp) }
-            if (c.pkg != null) TextButton(onClick = { Actions.openChat(ctx, c) }) { Hud("Open ↗", size = 9.sp) }
+            if (c.needsReply) TextButton(onClick = { scope.launch(Dispatchers.IO) { store.markDone(key) } }) { Hud(s(R.string.done), size = 9.sp, color = Alert) }
+            if (!c.isGroup) TextButton(onClick = { linking = true }) { Hud(s(R.string.link), size = 9.sp) }
+            if (c.pkg != null) TextButton(onClick = { Actions.openChat(ctx, c) }) { Hud(s(R.string.open_app), size = 9.sp) }
         }
         Rule()
         MessageList(Modifier.weight(1f), messages, { c }, showApp = false, selection, focusId)
@@ -105,11 +105,11 @@ internal fun PersonScreen(store: Store, personKey: String, onOpenChat: (String) 
         MessageList(Modifier.weight(1f), messages, chatOf, showApp = true, selection, focusId = 0L)
         Rule()
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Hud("Via", size = 8.sp, color = CyanDim)
+            Hud(s(R.string.via), size = 8.sp, color = CyanDim)
             p.chats.forEach { chat ->
                 Chip(chat.channel.label, Color(chat.channel.color), chat.key == target.key) { replyKey = chat.key }
             }
-            Hud("Chat ↗", size = 8.sp, modifier = Modifier.clickable { onOpenChat(target.key) }.padding(6.dp))
+            Hud(s(R.string.open_chat), size = 8.sp, modifier = Modifier.clickable { onOpenChat(target.key) }.padding(6.dp))
         }
         ReplyBar(store, target)
     }
@@ -165,7 +165,7 @@ private fun MessageList(
                 onClick = { scope.launch { state.animateScrollToItem(0) } },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(14.dp),
                 shape = Tag, color = Panel, border = androidx.compose.foundation.BorderStroke(1.dp, Cyan),
-            ) { Hud("▼ newest", size = 9.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) }
+            ) { Hud(s(R.string.newest), size = 9.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) }
         }
     }
 }
@@ -178,8 +178,8 @@ private fun dayLabel(start: Long): String {
     val today = dayStart(System.currentTimeMillis())
     val days = ((today - start) / DateUtils.DAY_IN_MILLIS).toInt()
     return when {
-        days <= 0 -> "Today"
-        days == 1 -> "Yesterday"
+        days <= 0 -> s(R.string.today)
+        days == 1 -> s(R.string.yesterday)
         days < 7 -> SimpleDateFormat("EEEE", Locale.getDefault()).format(start)
         Calendar.getInstance().apply { timeInMillis = start }.get(Calendar.YEAR) == Calendar.getInstance().get(Calendar.YEAR) ->
             SimpleDateFormat("d MMMM", Locale.getDefault()).format(start)
@@ -221,8 +221,8 @@ private fun Bubble(m: Msg, c: Conversation, showApp: Boolean, selection: Selecti
             var showOriginal by remember(m.id) { mutableStateOf(false) }
             Text(if (showOriginal && m.original != null) m.original else m.text, color = if (m.revoked) CyanDim else Cyan)
             Row(Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically) {
-                if (m.revoked) Hud("🗑 deleted by sender", size = 7.sp, color = Alert, modifier = Modifier.padding(end = 8.dp))
-                if (m.original != null) Hud(if (showOriginal) "original · show edited" else "✎ edited · show original", size = 7.sp, color = Alert,
+                if (m.revoked) Hud(s(R.string.deleted_by_sender), size = 7.sp, color = Alert, modifier = Modifier.padding(end = 8.dp))
+                if (m.original != null) Hud(s(if (showOriginal) R.string.show_edited else R.string.show_original), size = 7.sp, color = Alert,
                     modifier = Modifier.clickable { showOriginal = !showOriginal }.padding(end = 8.dp))
                 Hud(shortTime(m.ts), size = 7.sp, color = CyanDim)
             }
@@ -265,14 +265,14 @@ private fun SignalChips(m: Msg, c: Conversation) {
             Box {
                 SignalChip("📅 " + whenLabel(w)) { open = true }
                 DropdownMenu(open, onDismissRequest = { open = false }, containerColor = Panel) {
-                    MenuItem("Add to calendar") { open = false; Actions.addToCalendar(ctx, w, "${c.title}: ${m.text}") }
-                    MenuItem("Remind me") {
+                    MenuItem(s(R.string.add_to_calendar)) { open = false; Actions.addToCalendar(ctx, w, "${c.title}: ${m.text}") }
+                    MenuItem(s(R.string.remind_me)) {
                         open = false
                         askNotify()
                         // an hour ahead for timed plans; at 9 for all-day ones
                         val at = (if (w.hasTime) w.start - 3_600_000 else w.start).coerceAtLeast(System.currentTimeMillis() + 60_000)
                         scope.launch(Dispatchers.IO) { Reminders.add(ctx, c.key, at, m.text) }
-                        Toast.makeText(ctx, "Reminder set · ${whenLabel(Signals.When(at, true, ""))}", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(ctx, s(R.string.reminder_set, whenLabel(Signals.When(at, true, ""))), Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -289,8 +289,8 @@ private fun SignalChip(label: String, onClick: () -> Unit) =
 
 private fun whenLabel(w: Signals.When): String {
     val day = when (val d = ((dayStart(w.start) - dayStart(System.currentTimeMillis())) / DateUtils.DAY_IN_MILLIS).toInt()) {
-        0 -> "Today"
-        1 -> "Tomorrow"
+        0 -> s(R.string.today)
+        1 -> s(R.string.tomorrow)
         in 2..6 -> SimpleDateFormat("EEE", Locale.getDefault()).format(w.start)
         else -> SimpleDateFormat("d MMM", Locale.getDefault()).format(w.start)
     }
@@ -300,7 +300,7 @@ private fun whenLabel(w: Signals.When): String {
 // ---------- selection ----------
 
 /** Long-press-to-select state for a list; [delete] removes the picked items. */
-internal class Selection<T>(val ids: MutableSet<T>, val noun: String, val delete: () -> Unit) {
+internal class Selection<T>(val ids: MutableSet<T>, val deleteTitle: (Int) -> String, val delete: () -> Unit) {
     val active get() = ids.isNotEmpty()
     fun toggle(id: T) { if (!ids.remove(id)) ids.add(id) }
 }
@@ -314,7 +314,7 @@ private fun rememberSelection(store: Store, messages: List<Msg>, onEmpty: () -> 
     LaunchedEffect(messages) { val live = messages.mapTo(HashSet()) { it.id }; ids.retainAll(live) }
     BackHandler(ids.isNotEmpty()) { ids.clear() }
     return remember(messages) {
-        Selection(ids, "message") {
+        Selection(ids, { plural(R.plurals.delete_messages, it) }) {
             val doomed = ids.toList()
             val emptied = messages.all { it.id in ids }
             ids.clear()
@@ -334,19 +334,19 @@ internal fun SelectionBar(selection: Selection<*>, menu: (@Composable ColumnScop
     val n = selection.ids.size
     if (confirm) AlertDialog(
         onDismissRequest = { confirm = false }, containerColor = Panel, shape = Angled,
-        title = { Hud("Delete $n ${selection.noun}${if (n == 1) "" else "s"}?", size = 12.sp, bold = true) },
-        text = { Text("Removed from Omni Inbox only. They stay in the original app.", color = CyanDim, fontSize = 14.sp) },
-        confirmButton = { TextButton(onClick = { confirm = false; selection.delete() }) { Hud("Delete", size = 9.sp, color = Alert) } },
-        dismissButton = { TextButton(onClick = { confirm = false }) { Hud("Cancel", size = 9.sp) } },
+        title = { Hud(selection.deleteTitle(n), size = 12.sp, bold = true) },
+        text = { Text(s(R.string.removed_here_only), color = CyanDim, fontSize = 14.sp) },
+        confirmButton = { TextButton(onClick = { confirm = false; selection.delete() }) { Hud(s(R.string.delete), size = 9.sp, color = Alert) } },
+        dismissButton = { TextButton(onClick = { confirm = false }) { Hud(s(R.string.cancel), size = 9.sp) } },
     )
     Row(Modifier.fillMaxWidth().padding(8.dp).heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
         TextButton(onClick = { selection.ids.clear() }) { Text("✕", fontFamily = Head, fontSize = 18.sp, color = Cyan) }
-        Hud("$n selected", size = 14.sp, bold = true, modifier = Modifier.weight(1f))
+        Hud(s(R.string.n_selected, n), size = 14.sp, bold = true, modifier = Modifier.weight(1f))
         if (menu != null) Box {
             TextButton(onClick = { open = true }) { Text("⋮", fontSize = 22.sp, color = Cyan) }
             DropdownMenu(open, onDismissRequest = { open = false }, containerColor = Panel) { menu { open = false } }
         }
-        TextButton(onClick = { confirm = true }) { Hud("Delete", size = 10.sp, color = Alert) }
+        TextButton(onClick = { confirm = true }) { Hud(s(R.string.delete), size = 10.sp, color = Alert) }
     }
 }
 
@@ -361,12 +361,12 @@ private fun MessageSelectionBar(store: Store, selection: Selection<Long>, messag
     forwarding?.let { text -> ForwardDialog(store, text) { forwarding = null } }
     fun text() = Actions.asText(messages.filter { it.id in selection.ids }) { chatOf(it).title }
     SelectionBar(selection) { close ->
-        MenuItem("Copy") {
+        MenuItem(s(R.string.copy)) {
             close(); Actions.copy(ctx, text()); selection.ids.clear()
-            Toast.makeText(ctx, "Copied", Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, s(R.string.copied), Toast.LENGTH_SHORT).show()
         }
-        MenuItem("Share…") { close(); Actions.share(ctx, text()); selection.ids.clear() }
-        MenuItem("Forward…") { close(); forwarding = text(); selection.ids.clear() }
+        MenuItem(s(R.string.share)) { close(); Actions.share(ctx, text()); selection.ids.clear() }
+        MenuItem(s(R.string.forward)) { close(); forwarding = text(); selection.ids.clear() }
     }
 }
 
@@ -381,12 +381,12 @@ private fun ForwardDialog(store: Store, text: String, onDismiss: () -> Unit) {
     }
     AlertDialog(
         onDismissRequest = onDismiss, containerColor = Panel, shape = Angled,
-        title = { Hud("Forward to", size = 12.sp, bold = true) },
+        title = { Hud(s(R.string.forward_to), size = 12.sp, bold = true) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(text, color = CyanDim, fontSize = 14.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                NeonField(q, { q = it }, "Filter", Modifier.fillMaxWidth())
-                if (targets.isEmpty()) Text("No chat can send right now. SMS, linked Telegram, and chats with a fresh notification can.", color = CyanDim, fontSize = 14.sp)
+                NeonField(q, { q = it }, s(R.string.filter), Modifier.fillMaxWidth())
+                if (targets.isEmpty()) Text(s(R.string.no_targets), color = CyanDim, fontSize = 14.sp)
                 LazyColumn(Modifier.heightIn(max = 300.dp)) {
                     items(targets.filter { it.title.contains(q, true) }, key = { it.key }) { t ->
                         Row(
@@ -394,7 +394,7 @@ private fun ForwardDialog(store: Store, text: String, onDismiss: () -> Unit) {
                                 onDismiss()
                                 scope.launch {
                                     val ok = Actions.send(ctx, store, t, text)
-                                    Toast.makeText(ctx, if (ok) "Sent to ${t.title}" else "Couldn't send to ${t.title}", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(ctx, s(if (ok) R.string.sent_to else R.string.send_failed_to, t.title), Toast.LENGTH_SHORT).show()
                                 }
                             }.padding(vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -406,7 +406,7 @@ private fun ForwardDialog(store: Store, text: String, onDismiss: () -> Unit) {
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Hud("Close", size = 9.sp) } },
+        confirmButton = { TextButton(onClick = onDismiss) { Hud(s(R.string.close), size = 9.sp) } },
     )
 }
 
@@ -446,7 +446,7 @@ private fun ReplyBar(store: Store, c: Conversation) {
         scope.launch {
             val ok = Actions.schedule(ctx, c, body, at)
             if (!ok) text = body
-            Toast.makeText(ctx, if (ok) "Scheduled · ${shortTime(at)} ${java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(at)}" else "Couldn't schedule", Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, if (ok) s(R.string.scheduled_at, shortTime(at) + " " + java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(at)) else s(R.string.schedule_failed), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -459,24 +459,24 @@ private fun ReplyBar(store: Store, c: Conversation) {
         }
     }
     if (!canReply) {
-        Text("// Reply channel opens when a new message arrives from this chat. Use OPEN ↗ meanwhile.",
+        Text(s(R.string.reply_closed),
             Modifier.padding(16.dp), fontSize = 14.sp, color = CyanDim)
         return
     }
     SuggestionChips(store, c) { text = it }
     Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        NeonField(text, { text = it }, "Transmit via ${c.channel.label}", Modifier.weight(1f), singleLine = false)
+        NeonField(text, { text = it }, s(R.string.transmit_via, c.channel.label), Modifier.weight(1f), singleLine = false)
         Spacer(Modifier.width(8.dp))
         if (canSchedule && text.isNotBlank()) {
             TextButton(onClick = { scheduling = true }) { Text("⏱", fontSize = 20.sp, color = Cyan) }
         }
-        NeonButton("Send", text.isNotBlank()) {
+        NeonButton(s(R.string.send), text.isNotBlank()) {
             val body = text.trim()
             text = ""
             scope.launch {
                 if (!Actions.send(ctx, store, c, body)) {
                     text = body
-                    Toast.makeText(ctx, "Couldn't send - open ${c.channel.label} to reply", Toast.LENGTH_LONG).show()
+                    Toast.makeText(ctx, s(R.string.send_failed, c.channel.label), Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -490,26 +490,26 @@ private fun ScheduleDialog(onDismiss: () -> Unit, onPick: (Long) -> Unit) {
     val options = remember { snoozeOptions(System.currentTimeMillis()) }
     AlertDialog(
         onDismissRequest = onDismiss, containerColor = Panel, shape = Angled,
-        title = { Hud("Send later", size = 12.sp, bold = true) },
+        title = { Hud(s(R.string.send_later), size = 12.sp, bold = true) },
         text = {
             Column {
                 options.forEach { (label, at) ->
-                    Text(label, Modifier.fillMaxWidth().clickable { onPick(at) }.padding(vertical = 12.dp), color = Cyan, fontSize = 17.sp)
+                    Text(s(label), Modifier.fillMaxWidth().clickable { onPick(at) }.padding(vertical = 12.dp), color = Cyan, fontSize = 17.sp)
                 }
-                Text("Pick date & time…", Modifier.fillMaxWidth().clickable {
+                Text(s(R.string.pick_time), Modifier.fillMaxWidth().clickable {
                     val cal = Calendar.getInstance()
                     android.app.DatePickerDialog(ctx, { _, y, mo, d ->
                         android.app.TimePickerDialog(ctx, { _, h, mi ->
                             cal.set(y, mo, d, h, mi, 0)
                             if (cal.timeInMillis > System.currentTimeMillis()) onPick(cal.timeInMillis)
-                            else Toast.makeText(ctx, "That time has passed", Toast.LENGTH_SHORT).show()
+                            else Toast.makeText(ctx, s(R.string.time_passed), Toast.LENGTH_SHORT).show()
                         }, cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE), true).show()
                     }, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)).show()
                 }.padding(vertical = 12.dp), color = Cyan, fontSize = 17.sp)
-                Text("SMS goes out from this phone at that time; Telegram schedules it on its servers.", color = CyanDim, fontSize = 13.sp)
+                Text(s(R.string.schedule_note), color = CyanDim, fontSize = 13.sp)
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Hud("Cancel", size = 9.sp) } },
+        confirmButton = { TextButton(onClick = onDismiss) { Hud(s(R.string.cancel), size = 9.sp) } },
     )
 }
 
@@ -522,24 +522,24 @@ private fun CatchUpButton(title: String, messages: () -> List<Msg>) {
     if (ai != Assist.State.READY) return
     var open by remember { mutableStateOf(false) }
     TextButton(onClick = { open = true }) { Hud("✦", size = 12.sp) }
-    if (open) AiDialog("Catch up · $title", onDismiss = { open = false }) { Assist.summarize(title, messages()) }
+    if (open) AiDialog(s(R.string.catch_up, title), onDismiss = { open = false }) { Assist.summarize(title, messages()) }
 }
 
 /** Shows the result of [load] (or a failure note) in the app's dialog style. */
 @Composable
 internal fun AiDialog(title: String, onDismiss: () -> Unit, load: suspend () -> String?) {
-    val text by produceState<String?>(null) { value = load() ?: "Couldn't generate that right now." }
+    val text by produceState<String?>(null) { value = load() ?: s(R.string.ai_failed) }
     AlertDialog(
         onDismissRequest = onDismiss, containerColor = Panel, shape = Angled,
         title = { Hud(title, size = 12.sp, bold = true) },
         text = {
             Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                Text(text ?: "Thinking…", color = if (text == null) CyanDim else Cyan, fontSize = 16.sp)
+                Text(text ?: s(R.string.thinking), color = if (text == null) CyanDim else Cyan, fontSize = 16.sp)
                 Spacer(Modifier.height(10.dp))
-                Hud("✦ Gemini Nano · on this phone", size = 7.sp, color = CyanDim)
+                Hud(s(R.string.ai_badge), size = 7.sp, color = CyanDim)
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Hud("Close", size = 9.sp) } },
+        confirmButton = { TextButton(onClick = onDismiss) { Hud(s(R.string.close), size = 9.sp) } },
     )
 }
 

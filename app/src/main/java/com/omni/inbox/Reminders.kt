@@ -69,7 +69,7 @@ object Reminders {
             val sent = conv != null && runBlocking { Actions.send(ctx, store, conv, r.text) }
             // a sent scheduled message is quiet; only a failure needs your attention
             if (sent) return
-            notify(ctx, r.convKey, id, title, "Scheduled message not sent: ${r.text}")
+            notify(ctx, r.convKey, id, title, s(R.string.scheduled_failed_notice, r.text))
             return
         }
         notify(ctx, r.convKey, id, title, r.text)
@@ -77,7 +77,7 @@ object Reminders {
 
     private fun notify(ctx: Context, convKey: String, id: Long, title: String, text: String) {
         val nm = ctx.getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CHANNEL, "Reminders", NotificationManager.IMPORTANCE_HIGH))
+        nm.createNotificationChannel(NotificationChannel(CHANNEL, s(R.string.reminders_channel), NotificationManager.IMPORTANCE_HIGH))
         val open = PendingIntent.getActivity(
             ctx, id.toInt(), Intent(ctx, MainActivity::class.java).putExtra(EXTRA_OPEN, convKey).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,

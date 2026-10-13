@@ -20,7 +20,7 @@ class SnoozeTest {
     @Test fun lateEveningAndMondays() {
         val now = at(2026, 10, 19, 21) // Monday evening
         val o = snoozeOptions(now)
-        assertEquals("Tomorrow evening · 18:00", o[1].first)
+        assertEquals(R.string.snooze_tomorrow_evening, o[1].first)
         assertEquals(at(2026, 10, 20, 18), o[1].second)
         assertEquals(at(2026, 10, 26, 8), o[3].second) // a week later, not today
     }

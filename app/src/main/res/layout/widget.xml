@@ -16,6 +16,6 @@
         android:layout_marginTop="6dp" android:divider="#0C3440" android:dividerHeight="1dp" />
 
     <TextView android:id="@+id/empty" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
-        android:gravity="center" android:text="NOBODY WAITING ✓" android:textColor="#4FA9B8" android:textSize="12sp"
+        android:gravity="center" android:text="@string/widget_empty" android:textColor="#4FA9B8" android:textSize="12sp"
         android:fontFamily="sans-serif-condensed" android:letterSpacing="0.1" />
 </LinearLayout>

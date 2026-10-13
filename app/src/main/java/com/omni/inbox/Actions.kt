@@ -53,7 +53,7 @@ object Actions {
             if (runCatching { ctx.startActivity(link) }.isSuccess) return
         }
         if (Replies.openFromNotification(ctx, c.key)) return
-        c.pkg?.let { openApp(ctx, it) } ?: Toast.makeText(ctx, "App not installed", Toast.LENGTH_SHORT).show()
+        c.pkg?.let { openApp(ctx, it) } ?: Toast.makeText(ctx, s(R.string.app_not_installed), Toast.LENGTH_SHORT).show()
     }
 
     private fun deepLink(c: Conversation): Intent? {
@@ -76,14 +76,14 @@ object Actions {
     fun openApp(ctx: Context, pkg: String) {
         val intent = ctx.packageManager.getLaunchIntentForPackage(pkg)
         if (intent != null) ctx.startActivity(intent)
-        else Toast.makeText(ctx, "App not installed", Toast.LENGTH_SHORT).show()
+        else Toast.makeText(ctx, s(R.string.app_not_installed), Toast.LENGTH_SHORT).show()
     }
 
     /** "[13.10 18:02] Anna: hei" lines; time and sender only when copying several. */
     fun asText(msgs: List<Msg>, chatTitle: (Msg) -> String): String =
         if (msgs.size == 1) msgs[0].text
         else msgs.joinToString("\n") { m ->
-            val who = if (m.outgoing) "Me" else m.sender ?: chatTitle(m)
+            val who = if (m.outgoing) s(R.string.me) else m.sender ?: chatTitle(m)
             "[${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(m.ts)}] $who: ${m.text}"
         }
 
@@ -102,12 +102,12 @@ object Actions {
             .putExtra(android.provider.CalendarContract.EXTRA_EVENT_END_TIME, w.start + 3_600_000)
             .putExtra(android.provider.CalendarContract.EXTRA_EVENT_ALL_DAY, !w.hasTime)
             .putExtra(android.provider.CalendarContract.Events.TITLE, title.take(120))
-        runCatching { ctx.startActivity(intent) }.onFailure { Toast.makeText(ctx, "No calendar app", Toast.LENGTH_SHORT).show() }
+        runCatching { ctx.startActivity(intent) }.onFailure { Toast.makeText(ctx, s(R.string.no_calendar), Toast.LENGTH_SHORT).show() }
     }
 
     fun openMap(ctx: Context, place: String) {
         runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=" + Uri.encode(place)))) }
-            .onFailure { Toast.makeText(ctx, "No maps app", Toast.LENGTH_SHORT).show() }
+            .onFailure { Toast.makeText(ctx, s(R.string.no_maps), Toast.LENGTH_SHORT).show() }
     }
 
     private fun tgChat(c: Conversation) = c.key.removePrefix("tg:").toLongOrNull()?.takeIf { c.key.startsWith("tg:") }

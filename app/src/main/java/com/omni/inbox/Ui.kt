@@ -157,9 +157,9 @@ fun App() {
 internal fun TelegramBadge(onClick: () -> Unit) {
     val auth by Telegram.auth.collectAsState()
     val (label, color) = when (auth) {
-        Telegram.Auth.Ready -> "TG LINKED" to Cyan
-        Telegram.Auth.Unavailable -> "TG OFFLINE" to CyanDim
-        else -> "LINK TG" to Color(Channel.TELEGRAM.color)
+        Telegram.Auth.Ready -> s(R.string.tg_linked) to Cyan
+        Telegram.Auth.Unavailable -> s(R.string.tg_offline) to CyanDim
+        else -> s(R.string.tg_link) to Color(Channel.TELEGRAM.color)
     }
     Surface(onClick = onClick, shape = Tag, color = Panel, border = BorderStroke(1.dp, color.copy(alpha = 0.7f))) {
         Hud(label, size = 9.sp, color = color, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
@@ -208,14 +208,14 @@ internal fun SetupCard() {
             .background(Panel, Angled).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Hud("// Setup incomplete", color = Alert)
+        Hud(s(R.string.setup_incomplete), color = Alert)
         if (!listenerOn) {
-            Text("Allow notification access so WhatsApp, Signal, Messenger and Snapchat messages show up here.", color = CyanDim)
-            NeonButton("Notification access") { openListenerSettings(ctx) }
+            Text(s(R.string.setup_notifications), color = CyanDim)
+            NeonButton(s(R.string.notification_access)) { openListenerSettings(ctx) }
         }
         if (!smsOn) {
-            Text("Allow SMS and contacts to show your text messages with names.", color = CyanDim)
-            NeonButton("SMS & contacts") {
+            Text(s(R.string.setup_sms), color = CyanDim)
+            NeonButton(s(R.string.sms_contacts)) {
                 askPerms.launch(arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS, Manifest.permission.READ_CONTACTS))
             }
         }
@@ -255,42 +255,42 @@ private fun TelegramScreen(onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text("<", fontFamily = Head, fontSize = 20.sp, color = Cyan) }
-            Hud("Telegram uplink", size = 16.sp, bold = true)
+            Hud(s(R.string.telegram_uplink), size = 16.sp, bold = true)
         }
         Rule()
         when (val a = auth) {
             Telegram.Auth.Unavailable -> Text(
-                "The TDLib library isn't bundled in this build, so Telegram runs on notifications only.", color = CyanDim)
+                s(R.string.tg_unavailable), color = CyanDim)
             Telegram.Auth.NoCredentials -> {
-                Text("Get your own API ID and hash at my.telegram.org → API development tools (any app name works). They stay on this phone.", color = CyanDim)
+                Text(s(R.string.tg_credentials), color = CyanDim)
                 NeonField(input, { input = it.filter(Char::isDigit) }, "api_id", Modifier.fillMaxWidth(), KeyboardType.Number)
                 NeonField(input2, { input2 = it.trim() }, "api_hash", Modifier.fillMaxWidth())
-                NeonButton("Connect", input.isNotBlank() && input2.length >= 16) {
+                NeonButton(s(R.string.connect), input.isNotBlank() && input2.length >= 16) {
                     Telegram.saveCredentials(ctx, input.toInt(), input2)
                 }
             }
-            Telegram.Auth.Starting -> Hud("Connecting…", color = CyanDim)
+            Telegram.Auth.Starting -> Hud(s(R.string.connecting), color = CyanDim)
             Telegram.Auth.WaitPhone -> {
-                Text("Phone number in international format.", color = CyanDim)
+                Text(s(R.string.tg_phone), color = CyanDim)
                 NeonField(input, { input = it }, "+47 412 34 567", Modifier.fillMaxWidth(), KeyboardType.Phone)
-                NeonButton("Send code", !busy && input.isNotBlank()) { submit { Telegram.submitPhone(input.trim()) } }
+                NeonButton(s(R.string.send_code), !busy && input.isNotBlank()) { submit { Telegram.submitPhone(input.trim()) } }
             }
             is Telegram.Auth.WaitCode -> {
-                Text("Enter the login code Telegram sent${a.phone?.let { " to +$it" } ?: ""} (check the Telegram app).", color = CyanDim)
-                NeonField(input, { input = it.filter(Char::isDigit) }, "code", Modifier.fillMaxWidth(), KeyboardType.Number)
-                NeonButton("Verify", !busy && input.isNotBlank()) { submit { Telegram.submitCode(input) } }
+                Text(s(R.string.tg_code, a.phone?.let { s(R.string.tg_code_to, it) } ?: ""), color = CyanDim)
+                NeonField(input, { input = it.filter(Char::isDigit) }, s(R.string.code), Modifier.fillMaxWidth(), KeyboardType.Number)
+                NeonButton(s(R.string.verify), !busy && input.isNotBlank()) { submit { Telegram.submitCode(input) } }
             }
             is Telegram.Auth.WaitPassword -> {
-                Text("Two-step verification password${a.hint?.let { " (hint: $it)" } ?: ""}.", color = CyanDim)
-                NeonField(input, { input = it }, "password", Modifier.fillMaxWidth(), secret = true)
-                NeonButton("Unlock", !busy && input.isNotBlank()) { submit { Telegram.submitPassword(input) } }
+                Text(s(R.string.tg_password, a.hint?.let { s(R.string.tg_hint, it) } ?: ""), color = CyanDim)
+                NeonField(input, { input = it }, s(R.string.password), Modifier.fillMaxWidth(), secret = true)
+                NeonButton(s(R.string.unlock), !busy && input.isNotBlank()) { submit { Telegram.submitPassword(input) } }
             }
             Telegram.Auth.Ready -> {
-                Hud("● Link active", color = Cyan)
-                Text("Full history and live messages come straight from Telegram. ${status}", color = CyanDim)
-                NeonButton("Log out", !busy) { submit { Telegram.logOut(); null } }
+                Hud(s(R.string.link_active), color = Cyan)
+                Text(s(R.string.tg_ready, status), color = CyanDim)
+                NeonButton(s(R.string.log_out), !busy) { submit { Telegram.logOut(); null } }
             }
-            is Telegram.Auth.Unsupported -> Text("Telegram asked for a login step this app doesn't support yet: ${a.step}.", color = Alert)
+            is Telegram.Auth.Unsupported -> Text(s(R.string.tg_unsupported, a.step), color = Alert)
         }
         error?.let { Text(it, color = Alert) }
     }
@@ -318,9 +318,9 @@ private fun LockScreen() {
     Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Hud("Omni//Inbox", size = 24.sp, bold = true)
         Spacer(Modifier.height(8.dp))
-        Hud("// Vault sealed", size = 10.sp, color = CyanDim)
+        Hud(s(R.string.vault_sealed), size = 10.sp, color = CyanDim)
         Spacer(Modifier.height(32.dp))
-        NeonButton("Unlock") { activity?.unlock() }
+        NeonButton(s(R.string.unlock)) { activity?.unlock() }
     }
 }
 
@@ -334,15 +334,14 @@ private fun SettingsScreen(onTelegram: () -> Unit, onStats: () -> Unit, onBack: 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text("<", fontFamily = Head, fontSize = 20.sp, color = Cyan) }
-            Hud("System", size = 16.sp, bold = true)
+            Hud(s(R.string.system), size = 16.sp, bold = true)
         }
         Rule()
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Hud("App lock", size = 11.sp)
+                Hud(s(R.string.app_lock), size = 11.sp)
                 Text(
-                    if (lockAvailable) "Fingerprint, face or screen lock after 1 minute away. Also hides the app in recents and blocks screenshots."
-                    else "Set up a screen lock on the phone to enable this.",
+                    s(if (lockAvailable) R.string.app_lock_on else R.string.app_lock_off),
                     color = CyanDim, fontSize = 14.sp,
                 )
             }
@@ -354,21 +353,21 @@ private fun SettingsScreen(onTelegram: () -> Unit, onStats: () -> Unit, onBack: 
         }
         Rule()
         Column {
-            Hud("Encryption", size = 11.sp)
-            Text("Messages are stored in an encrypted database (SQLCipher, 256-bit AES) whose key is sealed by the phone's secure hardware. Telegram's own data is encrypted the same way.",
+            Hud(s(R.string.encryption), size = 11.sp)
+            Text(s(R.string.encryption_text),
                 color = CyanDim, fontSize = 14.sp)
         }
         Rule()
-        NeonButton("Telegram uplink", onClick = onTelegram)
+        NeonButton(s(R.string.telegram_uplink), onClick = onTelegram)
         Rule()
-        NeonButton("Stats", onClick = onStats)
+        NeonButton(s(R.string.stats), onClick = onStats)
         Rule()
         val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { ImportState.load(ctx, it) } }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Hud("WhatsApp history", size = 11.sp)
-            Text("In WhatsApp open a chat → ⋮ → More → Export chat, and share it to Omni Inbox. Or pick an exported file here.",
+            Hud(s(R.string.wa_history), size = 11.sp)
+            Text(s(R.string.wa_history_text),
                 color = CyanDim, fontSize = 14.sp)
-            NeonButton("Import chat file") { pick.launch(arrayOf("text/plain", "application/zip")) }
+            NeonButton(s(R.string.import_chat_file)) { pick.launch(arrayOf("text/plain", "application/zip")) }
         }
         Rule()
         AiSetting()
@@ -384,15 +383,15 @@ private fun AiSetting() {
     val state by Assist.state.collectAsState()
     val progress by Assist.progress.collectAsState()
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Hud("On-device AI", size = 11.sp)
+        Hud(s(R.string.ai_title), size = 11.sp)
         Text(when (state) {
-            Assist.State.CHECKING -> "Checking…"
-            Assist.State.UNAVAILABLE -> "This phone doesn't offer Gemini Nano (Android AICore), so catch-up summaries and reply suggestions are off. Everything else works."
-            Assist.State.DOWNLOADABLE -> "Gemini Nano can run on this phone. Download the model (via AICore, Wi-Fi recommended) to get catch-up summaries and reply suggestions. Messages never leave the phone. $progress"
-            Assist.State.DOWNLOADING -> "Downloading model… $progress"
-            Assist.State.READY -> "Ready. ✦ in a chat summarizes it, ✦ Brief in the inbox lists who's waiting and why, and suggested replies appear when someone awaits you. All on this phone."
+            Assist.State.CHECKING -> s(R.string.ai_checking)
+            Assist.State.UNAVAILABLE -> s(R.string.ai_unavailable)
+            Assist.State.DOWNLOADABLE -> s(R.string.ai_downloadable, progress)
+            Assist.State.DOWNLOADING -> s(R.string.ai_downloading, progress)
+            Assist.State.READY -> s(R.string.ai_ready)
         }, color = CyanDim, fontSize = 14.sp)
-        if (state == Assist.State.DOWNLOADABLE) NeonButton("Download model") { Assist.download() }
+        if (state == Assist.State.DOWNLOADABLE) NeonButton(s(R.string.ai_download)) { Assist.download() }
     }
 }
 
@@ -402,11 +401,11 @@ private fun KeepSetting() {
     val scope = rememberCoroutineScope()
     var days by remember { mutableIntStateOf(Housekeeping.keepDays(ctx)) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Hud("Keep messages", size = 11.sp)
-        Text("Older messages are deleted automatically once a day. Pinned chats are kept whole.", color = CyanDim, fontSize = 14.sp)
+        Hud(s(R.string.keep_messages), size = 11.sp)
+        Text(s(R.string.keep_text), color = CyanDim, fontSize = 14.sp)
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Housekeeping.KEEP_CHOICES.forEach { (d, label) ->
-                Chip(label, Cyan, d == days) { days = d; scope.launch(Dispatchers.IO) { Housekeeping.setKeepDays(ctx, d) } }
+                Chip(s(label), Cyan, d == days) { days = d; scope.launch(Dispatchers.IO) { Housekeeping.setKeepDays(ctx, d) } }
             }
         }
     }
@@ -423,31 +422,30 @@ private fun BackupSetting() {
     fun run(label: String, block: () -> String) {
         busy = true
         scope.launch {
-            val msg = withContext(Dispatchers.IO) { runCatching(block).getOrElse { "$label failed: ${it.message ?: "wrong password or not a backup"}" } }
+            val msg = withContext(Dispatchers.IO) { runCatching(block).getOrElse { s(R.string.backup_failed, label, it.message ?: s(R.string.backup_bad_password)) } }
             busy = false
             Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
         }
     }
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val pw = password; password = ""
-        if (uri != null) run("Backup") { Housekeeping.export(ctx, uri, pw); "Backup saved" }
+        if (uri != null) run(s(R.string.backup)) { Housekeeping.export(ctx, uri, pw); s(R.string.backup_saved) }
     }
     val open = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val pw = password; password = ""
-        if (uri != null) run("Restore") { "Restored ${Housekeeping.restore(ctx, uri, pw)} messages" }
+        if (uri != null) run(s(R.string.restore)) { s(R.string.restored_n, Housekeeping.restore(ctx, uri, pw)) }
     }
     asking?.let { mode ->
         var repeat by remember { mutableStateOf("") }
         val ok = password.length >= 8 && (mode == "restore" || repeat == password)
         AlertDialog(
             onDismissRequest = { asking = null; password = "" }, containerColor = Panel, shape = Angled,
-            title = { Hud(if (mode == "export") "Backup password" else "Backup's password", size = 12.sp, bold = true) },
+            title = { Hud(s(if (mode == "export") R.string.backup_password else R.string.backup_password_restore), size = 12.sp, bold = true) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(if (mode == "export") "The backup is encrypted with this password. Without it the file can't be opened, not even by you."
-                        else "Enter the password the backup was made with.", color = CyanDim, fontSize = 14.sp)
-                    NeonField(password, { password = it }, "password (8+ characters)", Modifier.fillMaxWidth(), secret = true)
-                    if (mode == "export") NeonField(repeat, { repeat = it }, "repeat password", Modifier.fillMaxWidth(), secret = true)
+                    Text(s(if (mode == "export") R.string.backup_password_text else R.string.restore_password_text), color = CyanDim, fontSize = 14.sp)
+                    NeonField(password, { password = it }, s(R.string.password_hint), Modifier.fillMaxWidth(), secret = true)
+                    if (mode == "export") NeonField(repeat, { repeat = it }, s(R.string.repeat_password), Modifier.fillMaxWidth(), secret = true)
                 }
             },
             confirmButton = {
@@ -455,20 +453,20 @@ private fun BackupSetting() {
                     asking = null
                     if (mode == "export") save.launch("omni-inbox-${SimpleDateFormat("yyyy-MM-dd", Locale.US).format(System.currentTimeMillis())}.omnibackup")
                     else open.launch(arrayOf("*/*"))
-                }) { Hud("Next", size = 9.sp, color = if (ok) Cyan else CyanDim) }
+                }) { Hud(s(R.string.next), size = 9.sp, color = if (ok) Cyan else CyanDim) }
             },
-            dismissButton = { TextButton(onClick = { asking = null; password = "" }) { Hud("Cancel", size = 9.sp) } },
+            dismissButton = { TextButton(onClick = { asking = null; password = "" }) { Hud(s(R.string.cancel), size = 9.sp) } },
         )
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Hud("Backup", size = 11.sp)
-        Text("Save everything to a password-protected file (e.g. on Google Drive), or merge a backup back in. Images included; manual links between apps aren't.",
+        Hud(s(R.string.backup), size = 11.sp)
+        Text(s(R.string.backup_text),
             color = CyanDim, fontSize = 14.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            NeonButton("Export", !busy) { asking = "export" }
-            NeonButton("Restore", !busy) { asking = "restore" }
+            NeonButton(s(R.string.export), !busy) { asking = "export" }
+            NeonButton(s(R.string.restore), !busy) { asking = "restore" }
         }
-        if (busy) Hud("Working…", size = 9.sp, color = CyanDim)
+        if (busy) Hud(s(R.string.working), size = 9.sp, color = CyanDim)
     }
 }
 
@@ -484,9 +482,9 @@ private fun SearchScreen(store: Store, onOpen: (String, Long) -> Unit, onBack: (
     Column(Modifier.fillMaxSize().imePadding()) {
         Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text("<", fontFamily = Head, fontSize = 20.sp, color = Cyan) }
-            NeonField(query, { query = it }, "Search · from:anna · app:telegram", Modifier.weight(1f))
+            NeonField(query, { query = it }, s(R.string.search_hint), Modifier.weight(1f))
         }
-        Hud(if (query.isBlank()) "// Scan all channels" else "${hits.size} hits", size = 9.sp, color = CyanDim, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+        Hud(if (query.isBlank()) s(R.string.search_all) else s(R.string.n_hits, hits.size), size = 9.sp, color = CyanDim, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
         Rule()
         LazyColumn(Modifier.fillMaxSize()) {
             items(hits, key = { it.id }) { h ->
@@ -523,15 +521,15 @@ internal fun LinkDialog(store: Store, c: Conversation, onDismiss: () -> Unit) {
     val candidates = all.filter { it.key !in mine && !it.isGroup && it.title.contains(q, true) }.take(40)
     AlertDialog(
         onDismissRequest = onDismiss, containerColor = Panel, shape = Angled,
-        title = { Hud("Link ${c.title}", size = 12.sp, bold = true) },
+        title = { Hud(s(R.string.link_title, c.title), size = 12.sp, bold = true) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (merged.isNotEmpty()) {
-                    Text("Merged with: " + merged.joinToString { "${it.title} (${it.channel.label})" }, color = CyanDim, fontSize = 14.sp)
-                    NeonButton("Unlink this chat") { scope.launch(Dispatchers.IO) { store.unlink(c.key) }; onDismiss() }
+                    Text(s(R.string.merged_with, merged.joinToString { "${it.title} (${it.channel.label})" }), color = CyanDim, fontSize = 14.sp)
+                    NeonButton(s(R.string.unlink)) { scope.launch(Dispatchers.IO) { store.unlink(c.key) }; onDismiss() }
                 }
-                Text("Same person on another app:", color = CyanDim, fontSize = 14.sp)
-                NeonField(q, { q = it }, "Filter", Modifier.fillMaxWidth())
+                Text(s(R.string.same_person), color = CyanDim, fontSize = 14.sp)
+                NeonField(q, { q = it }, s(R.string.filter), Modifier.fillMaxWidth())
                 LazyColumn(Modifier.heightIn(max = 300.dp)) {
                     items(candidates, key = { it.key }) { o ->
                         Row(Modifier.fillMaxWidth().clickable { scope.launch(Dispatchers.IO) { store.link(c.key, o.key) }; onDismiss() }.padding(vertical = 8.dp),
@@ -543,7 +541,7 @@ internal fun LinkDialog(store: Store, c: Conversation, onDismiss: () -> Unit) {
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Hud("Close", size = 9.sp) } },
+        confirmButton = { TextButton(onClick = onDismiss) { Hud(s(R.string.close), size = 9.sp) } },
     )
 }
 
@@ -557,28 +555,28 @@ private fun ImportScreen(state: ImportState.State, onDone: (String?) -> Unit) {
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { onDone(null) }) { Text("<", fontFamily = Head, fontSize = 20.sp, color = Cyan) }
-            Hud("WhatsApp import", size = 16.sp, bold = true)
+            Hud(s(R.string.wa_import), size = 16.sp, bold = true)
         }
         Rule()
         when (state) {
-            ImportState.State.Reading -> Hud("Decoding archive…", color = CyanDim)
+            ImportState.State.Reading -> Hud(s(R.string.decoding), color = CyanDim)
             is ImportState.State.Failed -> Text(state.reason, color = Alert)
             is ImportState.State.Ready -> {
                 val parsed = state.parsed
                 var title by rememberSaveable { mutableStateOf(parsed.title) }
                 var me by rememberSaveable { mutableStateOf<String?>(null) }
                 var busy by remember { mutableStateOf(false) }
-                Text("${parsed.lines.size} messages · ${shortTime(parsed.lines.first().ts)} → ${shortTime(parsed.lines.last().ts)}", color = CyanDim)
-                NeonField(title, { title = it }, "Chat name", Modifier.fillMaxWidth())
-                Hud("Which one is you?", size = 10.sp)
+                Text(s(R.string.import_summary, parsed.lines.size, shortTime(parsed.lines.first().ts), shortTime(parsed.lines.last().ts)), color = CyanDim)
+                NeonField(title, { title = it }, s(R.string.chat_name), Modifier.fillMaxWidth())
+                Hud(s(R.string.which_is_you), size = 10.sp)
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     parsed.senders.take(12).forEach { name -> Chip(name, Cyan, me == name) { me = name } }
                 }
-                NeonButton("Import", !busy && me != null && title.isNotBlank()) {
+                NeonButton(s(R.string.import_action), !busy && me != null && title.isNotBlank()) {
                     busy = true
                     scope.launch {
                         val n = withContext(Dispatchers.IO) { WhatsAppImport.save(ctx, parsed, title.trim(), me) }
-                        Toast.makeText(ctx, "Imported $n messages", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(ctx, s(R.string.imported_n, n), Toast.LENGTH_SHORT).show()
                         val key = withContext(Dispatchers.IO) { Store.get(ctx).conversations(Channel.WHATSAPP).firstOrNull { it.title.equals(title.trim(), true) }?.key }
                         onDone(key)
                     }
