@@ -20,6 +20,20 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         applySecureFlag()
         setContent { OmniTheme { App() } }
+        handleShare(intent)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleShare(intent)
+    }
+
+    /** A WhatsApp chat export shared into the app. */
+    private fun handleShare(intent: android.content.Intent?) {
+        if (intent?.action != android.content.Intent.ACTION_SEND) return
+        val uri = androidx.core.content.IntentCompat.getParcelableExtra(intent, android.content.Intent.EXTRA_STREAM, android.net.Uri::class.java)
+            ?: return
+        ImportState.load(this, uri)
     }
 
     override fun onStart() {

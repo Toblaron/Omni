@@ -12,6 +12,8 @@ data class Msg(
     val text: String,
     val ts: Long,
     val outgoing: Boolean,
+    val convKey: String = "",
+    val channel: Channel? = null,
 )
 
 data class Conversation(
@@ -26,7 +28,24 @@ data class Conversation(
     val unread: Boolean = false,
     val needsReply: Boolean = false,
     val isGroup: Boolean = false,
-)
+    /** null = automatic (by name), -1 = never merge, >0 = manually linked person. */
+    val personId: Long? = null,
+) {
+    /** Chats sharing this key are the same human across apps. */
+    val personKey: String
+        get() = when {
+            personId != null && personId > 0 -> "p:$personId"
+            personId == -1L || isGroup -> "c:$key"
+            else -> "n:" + title.lowercase().filter { it.isLetterOrDigit() || it == ' ' }.trim().replace(Regex("\\s+"), " ")
+        }
+}
+
+/** One human, possibly on several apps. */
+data class Person(val key: String, val name: String, val chats: List<Conversation>) {
+    val latest get() = chats.first()
+    val unread get() = chats.any { it.unread }
+    val needsReply get() = chats.any { it.needsReply }
+}
 
 data class SearchHit(val convKey: String, val channel: Channel, val title: String, val sender: String?, val text: String, val ts: Long)
 
@@ -98,7 +117,7 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
         SELECT m.conv_key, m.channel, m.pkg, m.conv_title, m.body, m.sender, MAX(m.ts), m.address,
                MAX(CASE WHEN m.outgoing=0 THEN m.ts END), MAX(CASE WHEN m.outgoing=1 THEN m.ts END),
                IFNULL(s.seen_ts, 0), IFNULL(s.done_ts, 0),
-               COUNT(DISTINCT CASE WHEN m.outgoing=0 THEN m.sender END)
+               COUNT(DISTINCT CASE WHEN m.outgoing=0 THEN m.sender END), s.person_id
         FROM messages m LEFT JOIN conv_state s ON s.conv_key = m.conv_key"""
 
     // SQLite returns the bare columns from the row that holds MAX(ts)
@@ -112,6 +131,7 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
             unread = lastIn > c.getLong(10),
             needsReply = lastIn > lastOut && lastIn > c.getLong(11),
             isGroup = c.getInt(12) > 1,
+            personId = if (c.isNull(13)) null else c.getLong(13),
         )
     }
 
@@ -135,6 +155,46 @@ class Store private constructor(private val ctx: Context, passphrase: ByteArray)
                 while (c.moveToNext()) add(Msg(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3), c.getInt(4) == 1))
             }
         }
+
+    /** Conversations grouped into people, most recent first. */
+    fun people(filter: Channel?): List<Person> =
+        conversations(filter).groupBy { it.personKey }.map { (k, chats) -> Person(k, chats.first().title, chats) }
+
+    fun person(key: String): Person? = people(null).firstOrNull { it.key == key }
+
+    /** Interleaved timeline of several chats, each message tagged with its chat and app. */
+    fun messages(keys: List<String>): List<Msg> {
+        if (keys.isEmpty()) return emptyList()
+        return readableDatabase.rawQuery(
+            "SELECT id, sender, body, ts, outgoing, conv_key, channel FROM messages WHERE conv_key IN (${keys.joinToString(",") { "?" }}) ORDER BY ts",
+            keys.toTypedArray(),
+        ).use { c ->
+            buildList {
+                while (c.moveToNext()) add(Msg(c.getLong(0), c.getString(1), c.getString(2), c.getLong(3), c.getInt(4) == 1, c.getString(5), Channel.valueOf(c.getString(6))))
+            }
+        }
+    }
+
+    /** Puts [other] into the same person as [key]. */
+    fun link(key: String, other: String) {
+        val db = writableDatabase
+        touchState(key); touchState(other)
+        fun personOf(k: String) = db.rawQuery("SELECT person_id FROM conv_state WHERE conv_key=?", arrayOf(k))
+            .use { if (it.moveToFirst() && !it.isNull(0) && it.getLong(0) > 0) it.getLong(0) else null }
+        val id = personOf(key) ?: personOf(other) ?: run {
+            val name = conversation(key)?.title ?: "Person"
+            db.insert("people", null, ContentValues().apply { put("name", name) })
+        }
+        db.execSQL("UPDATE conv_state SET person_id=? WHERE conv_key IN (?, ?)", arrayOf<Any>(id, key, other))
+        changed()
+    }
+
+    /** Stops [key] merging with anyone, including automatic name matches. */
+    fun unlink(key: String) {
+        touchState(key)
+        writableDatabase.execSQL("UPDATE conv_state SET person_id=-1 WHERE conv_key=?", arrayOf<Any>(key))
+        changed()
+    }
 
     // ---------- reading state ----------
 

@@ -114,6 +114,9 @@ private fun Rule() = Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
 // ---------- navigation ----------
 
 @Composable
+private operator fun Regex.contains(text: String) = matches(text)
+
+@Composable
 fun App() {
     val ctx = LocalContext.current
     val store = remember { Store.get(ctx) }
@@ -126,12 +129,15 @@ fun App() {
     BackHandler(route != "inbox") { up() }
     Surface(Modifier.fillMaxSize(), color = Void) {
         Box(Modifier.safeDrawingPadding()) {
+            val importing by ImportState.state.collectAsState()
             if (locked) LockScreen()
+            else if (importing != null) ImportScreen(importing!!) { key -> ImportState.clear(); if (key != null) go(key) }
             else when (route) {
                 "inbox" -> InboxScreen(store, onOpen = ::go, onTelegram = { go("telegram") }, onSearch = { go("search") }, onSettings = { go("settings") })
                 "telegram" -> TelegramScreen(::up)
                 "settings" -> SettingsScreen(onTelegram = { go("telegram") }, onBack = ::up)
                 "search" -> SearchScreen(store, onOpen = ::go, onBack = ::up)
+                in Regex("person:.*") -> PersonScreen(store, route.removePrefix("person:"), onOpenChat = ::go, onBack = ::up)
                 else -> ConversationScreen(store, route, ::up)
             }
         }
@@ -145,6 +151,7 @@ private fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () -
     val version by store.changes.collectAsState()
     var filter by rememberSaveable { mutableStateOf<Channel?>(null) }
     var replyOnly by rememberSaveable { mutableStateOf(false) }
+    var peopleMode by rememberSaveable { mutableStateOf(true) }
     val all by produceState(emptyList<Conversation>(), version, filter) {
         value = withContext(Dispatchers.IO) { store.conversations(filter) }
     }
@@ -170,6 +177,7 @@ private fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () -
         ) {
             Chip("All", Cyan, filter == null && !replyOnly) { filter = null; replyOnly = false }
             Chip("Reply · $waiting", Alert, replyOnly) { replyOnly = !replyOnly }
+            Chip(if (peopleMode) "People" else "Chats", CyanDim, peopleMode) { peopleMode = !peopleMode }
             Channel.entries.forEach { ch -> Chip(ch.label, Color(ch.color), filter == ch) { filter = if (filter == ch) null else ch } }
         }
         Rule()
@@ -179,7 +187,13 @@ private fun InboxScreen(store: Store, onOpen: (String) -> Unit, onTelegram: () -
             }
         } else {
             LazyColumn(Modifier.fillMaxSize()) {
-                items(conversations, key = { it.key }) { c ->
+                if (peopleMode) {
+                    val people = conversations.groupBy { it.personKey }.map { (k, chats) -> Person(k, chats.first().title, chats) }
+                    items(people, key = { it.key }) { p ->
+                        PersonRow(p) { if (p.chats.size == 1) onOpen(p.latest.key) else onOpen("person:${p.key}") }
+                        Rule()
+                    }
+                } else items(conversations, key = { it.key }) { c ->
                     ConversationRow(c) { onOpen(c.key) }
                     Rule()
                 }
@@ -371,6 +385,8 @@ private fun ConversationScreen(store: Store, key: String, onBack: () -> Unit) {
     val c = conv ?: return
     LaunchedEffect(key, c.lastTs) { withContext(Dispatchers.IO) { store.markSeen(key) } }
     val scope = rememberCoroutineScope()
+    var linking by remember { mutableStateOf(false) }
+    if (linking) LinkDialog(store, c, onDismiss = { linking = false })
 
     Column(Modifier.fillMaxSize().imePadding()) {
         Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -382,6 +398,7 @@ private fun ConversationScreen(store: Store, key: String, onBack: () -> Unit) {
                 Hud(c.channel.label, size = 8.sp, color = Color(c.channel.color))
             }
             if (c.needsReply) TextButton(onClick = { scope.launch(Dispatchers.IO) { store.markDone(key) } }) { Hud("Done ✓", size = 9.sp, color = Alert) }
+            if (!c.isGroup) TextButton(onClick = { linking = true }) { Hud("Link", size = 9.sp) }
             c.pkg?.let { pkg -> TextButton(onClick = { openApp(ctx, pkg) }) { Hud("Open ↗", size = 9.sp) } }
         }
         Rule()
@@ -394,7 +411,7 @@ private fun ConversationScreen(store: Store, key: String, onBack: () -> Unit) {
 }
 
 @Composable
-private fun Bubble(m: Msg, c: Conversation) {
+private fun Bubble(m: Msg, c: Conversation, showApp: Boolean = false) {
     val mine = m.outgoing
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
         Column(
@@ -403,7 +420,8 @@ private fun Bubble(m: Msg, c: Conversation) {
                 .background(if (mine) Cyan.copy(alpha = 0.09f) else Panel, Angled)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            if (!mine && m.sender != null && m.sender != c.title) Hud(m.sender, size = 8.sp, color = Color(c.channel.color))
+            if (showApp) Hud(c.channel.label + if (!mine && m.sender != null && m.sender != c.title) " · ${m.sender}" else "", size = 7.sp, color = Color(c.channel.color))
+            else if (!mine && m.sender != null && m.sender != c.title) Hud(m.sender, size = 8.sp, color = Color(c.channel.color))
             Text(m.text, color = Cyan)
             Hud(shortTime(m.ts), size = 7.sp, color = CyanDim, modifier = Modifier.align(Alignment.End))
         }
@@ -516,6 +534,14 @@ private fun SettingsScreen(onTelegram: () -> Unit, onBack: () -> Unit) {
         }
         Rule()
         NeonButton("Telegram uplink", onClick = onTelegram)
+        Rule()
+        val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { ImportState.load(ctx, it) } }
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Hud("WhatsApp history", size = 11.sp)
+            Text("In WhatsApp open a chat → ⋮ → More → Export chat, and share it to Omni Inbox. Or pick an exported file here.",
+                color = CyanDim, fontSize = 14.sp)
+            NeonButton("Import chat file") { pick.launch(arrayOf("text/plain", "application/zip")) }
+        }
     }
 }
 
@@ -548,6 +574,161 @@ private fun SearchScreen(store: Store, onOpen: (String) -> Unit, onBack: () -> U
                     Text(h.text, color = CyanDim, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
                 Rule()
+            }
+        }
+    }
+}
+
+// ---------- people ----------
+
+@Composable
+private fun AppTags(chats: List<Conversation>) = Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    chats.map { it.channel }.distinct().forEach { Hud(it.label, size = 8.sp, color = Color(it.color)) }
+}
+
+@Composable
+private fun PersonRow(p: Person, onClick: () -> Unit) {
+    val c = p.latest
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Avatar(p.name, c.channel)
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (p.unread) Box(Modifier.padding(end = 6.dp).size(7.dp).background(Cyan, Tag))
+                Text(p.name, Modifier.weight(1f), fontWeight = if (p.unread) FontWeight.Bold else FontWeight.Normal,
+                    color = if (p.unread) Cyan else Cyan.copy(alpha = 0.85f), fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (p.needsReply) {
+                    Hud("↩ reply", size = 7.sp, color = Alert, modifier = Modifier.border(1.dp, Alert.copy(alpha = 0.6f), Tag).padding(horizontal = 5.dp, vertical = 2.dp))
+                    Spacer(Modifier.width(6.dp))
+                }
+                Hud(shortTime(c.lastTs), size = 9.sp, color = CyanDim)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AppTags(p.chats)
+                Spacer(Modifier.width(8.dp))
+                val preview = if (c.lastSender != null && c.lastSender != c.title) "${c.lastSender}: ${c.lastText}" else c.lastText
+                Text(preview, fontSize = 15.sp, color = CyanDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+/** One human's messages from every app, interleaved; replies go out on the chosen app. */
+@Composable
+private fun PersonScreen(store: Store, personKey: String, onOpenChat: (String) -> Unit, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    val version by store.changes.collectAsState()
+    val person by produceState<Person?>(null, version) { value = withContext(Dispatchers.IO) { store.person(personKey) } }
+    val p = person ?: return
+    val messages by produceState(emptyList<Msg>(), version, p.chats.size) {
+        value = withContext(Dispatchers.IO) { store.messages(p.chats.map { it.key }) }
+    }
+    // reply where they last wrote from
+    var replyKey by rememberSaveable(personKey) { mutableStateOf<String?>(null) }
+    val target = p.chats.firstOrNull { it.key == replyKey } ?: p.chats.first()
+    LaunchedEffect(personKey, p.latest.lastTs) { withContext(Dispatchers.IO) { p.chats.forEach { store.markSeen(it.key) } } }
+
+    Column(Modifier.fillMaxSize().imePadding()) {
+        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onBack) { Text("<", fontFamily = Head, fontSize = 20.sp, color = Cyan) }
+            Avatar(p.name, p.latest.channel)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(p.name, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                AppTags(p.chats)
+            }
+        }
+        Rule()
+        LazyColumn(Modifier.weight(1f).fillMaxWidth(), reverseLayout = true, contentPadding = PaddingValues(12.dp)) {
+            items(messages.asReversed(), key = { it.id }) { m ->
+                val chat = p.chats.firstOrNull { it.key == m.convKey } ?: p.latest
+                Bubble(m, chat, showApp = true)
+            }
+        }
+        Rule()
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Hud("Via", size = 8.sp, color = CyanDim)
+            p.chats.forEach { chat ->
+                Chip(chat.channel.label, Color(chat.channel.color), chat.key == target.key) { replyKey = chat.key }
+            }
+            Hud("Chat ↗", size = 8.sp, modifier = Modifier.clickable { onOpenChat(target.key) }.padding(6.dp))
+        }
+        ReplyBar(ctx, store, target)
+    }
+}
+
+@Composable
+private fun LinkDialog(store: Store, c: Conversation, onDismiss: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var q by remember { mutableStateOf("") }
+    val all by produceState(emptyList<Conversation>()) { value = withContext(Dispatchers.IO) { store.conversations(null) } }
+    val merged = all.filter { it.personKey == c.personKey && it.key != c.key }
+    val candidates = all.filter { it.key != c.key && !it.isGroup && it.personKey != c.personKey && it.title.contains(q, true) }.take(40)
+    AlertDialog(
+        onDismissRequest = onDismiss, containerColor = Panel, shape = Angled,
+        title = { Hud("Link ${c.title}", size = 12.sp, bold = true) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (merged.isNotEmpty()) {
+                    Text("Merged with: " + merged.joinToString { "${it.title} (${it.channel.label})" }, color = CyanDim, fontSize = 14.sp)
+                    NeonButton("Unlink this chat") { scope.launch(Dispatchers.IO) { store.unlink(c.key) }; onDismiss() }
+                }
+                Text("Same person on another app:", color = CyanDim, fontSize = 14.sp)
+                NeonField(q, { q = it }, "Filter", Modifier.fillMaxWidth())
+                LazyColumn(Modifier.heightIn(max = 300.dp)) {
+                    items(candidates, key = { it.key }) { o ->
+                        Row(Modifier.fillMaxWidth().clickable { scope.launch(Dispatchers.IO) { store.link(c.key, o.key) }; onDismiss() }.padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Hud(o.channel.label, size = 8.sp, color = Color(o.channel.color), modifier = Modifier.width(80.dp))
+                            Text(o.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Hud("Close", size = 9.sp) } },
+    )
+}
+
+// ---------- import ----------
+
+@Composable
+private fun ImportScreen(state: ImportState.State, onDone: (String?) -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    BackHandler { onDone(null) }
+    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { onDone(null) }) { Text("<", fontFamily = Head, fontSize = 20.sp, color = Cyan) }
+            Hud("WhatsApp import", size = 16.sp, bold = true)
+        }
+        Rule()
+        when (state) {
+            ImportState.State.Reading -> Hud("Decoding archive…", color = CyanDim)
+            is ImportState.State.Failed -> Text(state.reason, color = Alert)
+            is ImportState.State.Ready -> {
+                val parsed = state.parsed
+                var title by rememberSaveable { mutableStateOf(parsed.title) }
+                var me by rememberSaveable { mutableStateOf<String?>(null) }
+                var busy by remember { mutableStateOf(false) }
+                Text("${parsed.lines.size} messages · ${shortTime(parsed.lines.first().ts)} → ${shortTime(parsed.lines.last().ts)}", color = CyanDim)
+                NeonField(title, { title = it }, "Chat name", Modifier.fillMaxWidth())
+                Hud("Which one is you?", size = 10.sp)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    parsed.senders.take(12).forEach { name -> Chip(name, Cyan, me == name) { me = name } }
+                }
+                NeonButton("Import", !busy && me != null && title.isNotBlank()) {
+                    busy = true
+                    scope.launch {
+                        val n = withContext(Dispatchers.IO) { WhatsAppImport.save(ctx, parsed, title.trim(), me) }
+                        Toast.makeText(ctx, "Imported $n messages", Toast.LENGTH_SHORT).show()
+                        val key = withContext(Dispatchers.IO) { Store.get(ctx).conversations(Channel.WHATSAPP).firstOrNull { it.title.equals(title.trim(), true) }?.key }
+                        onDone(key)
+                    }
+                }
             }
         }
     }

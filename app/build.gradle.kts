@@ -26,4 +26,5 @@ dependencies {
     implementation("androidx.sqlite:sqlite:2.7.1")
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.fragment:fragment-ktx:1.9.1")
+    testImplementation("junit:junit:4.13.2")
 }
